@@ -33,3 +33,7 @@ select = ["E", "W", "F", "I", "B", "UP", "DJ", "S", "SIM", "RUF"]
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings"
 addopts = ["--strict-markers", "--strict-config"]
+filterwarnings = [
+    # WhiteNoise warns that STATIC_ROOT doesn't exist; tests don't run collectstatic.
+    "ignore:No directory at:UserWarning",
+]

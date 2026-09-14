@@ -1,0 +1,18 @@
+# The build context is backend/. Leave out the local virtualenv, caches, and generated
+# files (the image builds its own), and never send .env files: containers get their
+# settings from the runtime environment. Patterns without **/ match only at the top level.
+
+**/.env*
+
+.venv
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.py[cod]
+
+# collectstatic output; the image runs collectstatic itself.
+staticfiles
+
+# The image doesn't need its own build files.
+Dockerfile
+.dockerignore

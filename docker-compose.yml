@@ -27,6 +27,32 @@ services:
       start_period: 30s
       start_interval: 1s
 
+  backend:
+    # The production image from backend/Dockerfile, with Django's development server in
+    # place of Gunicorn. After changing dependencies, rebuild it with
+    # `docker compose up --build`: the bind mount below updates code, not packages.
+    build:
+      context: ./backend
+      target: runtime
+    # Migrating on every start is a local convenience; deployed environments run
+    # migrations as a one-off task. exec makes runserver PID 1, so it receives the stop
+    # signal, which a shell running as PID 1 would ignore. 0.0.0.0 accepts connections
+    # from outside the container.
+    command: ["sh", "-c", "python manage.py migrate && exec python manage.py runserver 0.0.0.0:8000"]
+    env_file: .env
+    environment:
+      # Replaces localhost from .env: containers reach the database by its service name.
+      POSTGRES_HOST: db
+    volumes:
+      # The source replaces the image's copy of the code, so runserver reloads on edits.
+      # The virtualenv lives in /opt/venv, outside the mount.
+      - ./backend:/app
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   # Survives `docker compose down` (`down -v` deletes it). The image applies the
   # POSTGRES_* values only when it initializes an empty volume.

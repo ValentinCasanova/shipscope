@@ -1,0 +1,57 @@
+# Hooks that run on every commit: file hygiene, secret scanning, and the backend
+# and frontend formatters and linters. Set up once per clone:
+#   (cd backend && uv sync) && (cd frontend && npm ci) && pre-commit install
+# The local hooks call the tool versions pinned in backend/uv.lock and
+# frontend/package-lock.json, so commits and CI always run the same versions.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-added-large-files
+      - id: detect-private-key
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      # Lint fixes run before formatting, as Ruff recommends. --force-exclude keeps
+      # Ruff's excludes (such as migrations) in effect for files passed explicitly.
+      - id: ruff-check
+        name: ruff check (backend)
+        entry: uv run --project backend --frozen ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+        files: ^backend/
+        require_serial: true
+      - id: ruff-format
+        name: ruff format (backend)
+        entry: uv run --project backend --frozen ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        files: ^backend/
+        require_serial: true
+      - id: prettier
+        name: prettier (frontend)
+        entry: frontend/node_modules/.bin/prettier --write --ignore-unknown --ignore-path frontend/.prettierignore
+        language: system
+        types: [text]
+        files: ^frontend/
+      # Type-aware rules can be affected by changes in other files, so lint the
+      # whole frontend, exactly as CI will.
+      - id: eslint
+        name: eslint (frontend)
+        entry: npm --prefix frontend run --silent lint
+        language: system
+        types_or: [javascript, jsx, ts, tsx]
+        files: ^frontend/
+        pass_filenames: false

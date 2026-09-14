@@ -1,0 +1,33 @@
+# Local development services. Values come from the repo-root .env; create it with
+# `cp .env.example .env`. Published ports are bound to 127.0.0.1, so other machines
+# on the network can't connect to them.
+
+name: shipscope
+
+services:
+  db:
+    # Debian-based rather than Alpine, so text sorts with glibc locales as it does on
+    # RDS. Keep the major version in step with RDS.
+    image: postgres:17
+    env_file: .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      # -h checks over TCP: on first start the image creates the database using a
+      # temporary server that listens only on a Unix socket, so a socket check would
+      # pass too early. -U and -d keep failed-login noise out of the server log, and
+      # $$ leaves the variables for the container's shell to expand.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Probe every second during startup, then every 10 seconds once healthy.
+      start_period: 30s
+      start_interval: 1s
+
+volumes:
+  # Survives `docker compose down` (`down -v` deletes it). The image applies the
+  # POSTGRES_* values only when it initializes an empty volume.
+  pgdata:

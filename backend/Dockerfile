@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # Production image for the Django API: Gunicorn, running as a non-root user.
-#   docker build --target runtime -t shipscope-backend backend
+#   docker build --target runtime -t shipscope-backend:prod backend
+# The :prod tag keeps this build apart from shipscope-backend:latest, the image Compose
+# builds and runs.
 # The builder stage installs the locked dependencies into /opt/venv. The runtime stage
 # copies in only that virtualenv and the app code.
 

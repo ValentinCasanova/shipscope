@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+
+# Vite dev server for local development only. No frontend container is deployed: the
+# production build (`npm run build`) is served as static files. docker-compose.yml
+# bind-mounts the source over /app, so this image mainly provides Node and the
+# installed packages.
+
+# The tag names the Debian release, as the backend image's does.
+FROM node:24-trixie-slim
+
+# The image's unprivileged node user owns /app, so npm ci can install into it.
+RUN install -d -o node -g node /app
+WORKDIR /app
+USER node
+
+# Install from the lockfile before copying the code, so this layer is rebuilt when the
+# dependency files change and reused when only code changes. npm ci fails if
+# package-lock.json doesn't match package.json. The cache mount speeds up rebuilds and
+# never ends up in the image.
+COPY --chown=node:node package.json package-lock.json ./
+RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 \
+    npm ci --no-audit --no-fund
+
+COPY --chown=node:node . .
+
+EXPOSE 5173
+
+# Runs vite directly rather than through npm, so it is PID 1 and receives the stop
+# signal itself.
+#   --host 0.0.0.0   listen on all interfaces; the default, localhost, can't be reached
+#                    from outside the container
+#   --strictPort     exit if 5173 is taken, instead of moving to a port that isn't
+#                    published
+CMD ["./node_modules/.bin/vite", "--host", "0.0.0.0", "--strictPort"]

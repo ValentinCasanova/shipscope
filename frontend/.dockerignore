@@ -1,0 +1,14 @@
+# The build context is frontend/. Leave out installed packages (the image runs npm ci
+# itself), build and test output, and .env files. Patterns without **/ match only at
+# the top level.
+
+**/.env*
+
+node_modules
+dist
+coverage
+**/*.tsbuildinfo
+
+# The image doesn't need its own build files.
+Dockerfile.dev
+.dockerignore

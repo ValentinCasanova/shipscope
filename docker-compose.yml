@@ -53,6 +53,30 @@ services:
       db:
         condition: service_healthy
 
+  frontend:
+    # Vite's dev server with hot reload, for local development only; deployed
+    # environments serve the output of `npm run build` as static files. After changing
+    # dependencies, run `docker compose up --build -V` (see the node_modules volume below).
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    # No env_file: the dev server only needs the proxy target, and none of the backend's
+    # settings belong in the frontend container.
+    environment:
+      # The dev server forwards /api/ requests here. The browser only ever talks to
+      # localhost:5173, so this address never reaches browser code.
+      API_PROXY_TARGET: http://backend:8000
+    volumes:
+      - ./frontend:/app
+      # An anonymous volume over the mounted folder's node_modules, so the container
+      # keeps the packages the image installed. It is kept when the container is
+      # recreated; -V replaces it with a fresh copy from the image.
+      - /app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - backend
+
 volumes:
   # Survives `docker compose down` (`down -v` deletes it). The image applies the
   # POSTGRES_* values only when it initializes an empty volume.

@@ -7,6 +7,7 @@ defaults, and DEBUG stays off unless it is explicitly enabled.
 from pathlib import Path
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -18,6 +19,11 @@ env = environ.Env()
 environ.Env.read_env(BASE_DIR.parent / ".env")
 
 SECRET_KEY = env("DJANGO_SECRET_KEY")
+# An unset variable already fails above. Django only rejects an empty key when something
+# first uses it, such as signing a session, so without this check an empty value (as in a
+# freshly copied .env) would start without errors.
+if not SECRET_KEY:
+    raise ImproperlyConfigured("The DJANGO_SECRET_KEY environment variable is empty")
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=[])
 

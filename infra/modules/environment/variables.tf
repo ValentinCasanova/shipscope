@@ -17,3 +17,31 @@ variable "vpc_cidr" {
     error_message = "vpc_cidr must be an IPv4 /16, such as 10.10.0.0/16."
   }
 }
+
+# Safety settings that differ between staging and prod. Staging can be destroyed and
+# recreated between work sessions; prod can't be deleted by accident.
+
+variable "deletion_protection" {
+  description = "Whether AWS refuses to delete the database and the load balancer."
+  type        = bool
+}
+
+variable "db_backup_retention_days" {
+  description = "Days of automated database backups to keep."
+  type        = number
+}
+
+variable "db_final_snapshot" {
+  description = "Whether destroying the database first takes a final snapshot."
+  type        = bool
+}
+
+variable "secret_recovery_window_days" {
+  description = "Days a deleted secret can be restored: 0, or 7 to 30. 0 lets a destroyed environment be recreated at once with the same secret names."
+  type        = number
+
+  validation {
+    condition     = var.secret_recovery_window_days == 0 || (var.secret_recovery_window_days >= 7 && var.secret_recovery_window_days <= 30)
+    error_message = "secret_recovery_window_days must be 0 or between 7 and 30."
+  }
+}

@@ -19,3 +19,8 @@ output "task_security_group_id" {
   description = "Security group for API tasks, including one-off tasks such as migrations."
   value       = module.environment.task_security_group_id
 }
+
+output "database_address" {
+  description = "Host name of the database."
+  value       = module.environment.database_address
+}

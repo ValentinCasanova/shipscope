@@ -69,6 +69,7 @@ Settings come from environment variables. Compose passes the repo-root `.env` to
 | `DJANGO_DEBUG` | backend | `true` | `false` when unset |
 | `DJANGO_ALLOWED_HOSTS` | backend | `localhost,127.0.0.1` | Comma-separated host names Django serves |
 | `DJANGO_BEHIND_CLOUDFRONT` | backend | Not set | `true` in AWS: trust CloudFront's `CloudFront-Forwarded-Proto` header to tell whether the browser used HTTPS. Only safe where nothing but CloudFront can reach the app. |
+| `DJANGO_LOG_FORMAT` | backend, Gunicorn | Not set | `plain` when unset. `json` in AWS: one JSON object per line, for Django's and Gunicorn's logs |
 | `POSTGRES_DB` | db, backend | `shipscope` | |
 | `POSTGRES_USER` | db, backend | `shipscope` | |
 | `POSTGRES_PASSWORD` | db, backend | `shipscope-local` | Required. For local use only. |
@@ -141,7 +142,7 @@ docker run --rm --network shipscope_default -p 127.0.0.1:8001:8000 \
   --env-file .env -e POSTGRES_HOST=db -e DJANGO_DEBUG=false shipscope-backend:prod
 ```
 
-Gunicorn then serves http://localhost:8001/api/health/. It starts one worker unless `WEB_CONCURRENCY` is set. The image is about 230 MB unpacked, 143 MB of it the `python:3.14-slim` base, and 64 MB compressed.
+Gunicorn then serves http://localhost:8001/api/health/. It starts one worker unless `WEB_CONCURRENCY` is set. To see the logs as AWS gets them, one JSON object per line, add `-e DJANGO_LOG_FORMAT=json`; `backend/gunicorn.conf.py` applies the same format to Gunicorn's own logs. The image is about 230 MB unpacked, 143 MB of it the `python:3.14-slim` base, and 64 MB compressed.
 
 The frontend has no production container: `npm run build` produces static files, and `frontend/Dockerfile.dev` exists only for local development.
 

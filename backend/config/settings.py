@@ -4,12 +4,14 @@ Environment-specific values come from environment variables. Secrets have no
 defaults, and DEBUG stays off unless it is explicitly enabled.
 """
 
+import logging
 from pathlib import Path
 
 import environ
 from django.core.exceptions import ImproperlyConfigured
 
 from .ecs import task_private_ips
+from .logs import FORMATTERS
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -176,22 +178,27 @@ REST_FRAMEWORK = {
 
 # Logging
 # Django's default config only prints to the console while DEBUG is on, which would
-# hide production errors. Send INFO and above to stdout, where container logs are read.
+# hide production errors. Send INFO and above to stdout, where container logs are read,
+# in the format DJANGO_LOG_FORMAT picks (see logs.py).
+
+log_format = env("DJANGO_LOG_FORMAT", default="plain")
+if log_format not in FORMATTERS:
+    raise ImproperlyConfigured(
+        f"DJANGO_LOG_FORMAT must be one of {', '.join(FORMATTERS)}, not {log_format!r}"
+    )
+if log_format == "json":
+    # Python warnings would otherwise print as plain text to stderr.
+    logging.captureWarnings(True)
 
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "formatters": {
-        "plain": {
-            "format": "{asctime} {levelname} {name} {message}",
-            "style": "{",
-        },
-    },
+    "formatters": FORMATTERS,
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
             "stream": "ext://sys.stdout",
-            "formatter": "plain",
+            "formatter": log_format,
         },
     },
     "root": {"handlers": ["console"], "level": "INFO"},

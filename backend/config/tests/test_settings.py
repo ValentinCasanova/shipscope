@@ -1,13 +1,8 @@
 import json
-import os
 import secrets
-import subprocess
-import sys
-from pathlib import Path
 
 from .ecs_metadata import TASK_IP
-
-BACKEND_DIR = Path(__file__).resolve().parents[2]
+from .processes import run_in_new_process
 
 CLOUDFRONT_HOST = "d111111abcdef8.cloudfront.net"
 
@@ -20,26 +15,6 @@ DEPLOYED_ENVIRONMENT = {
     "DJANGO_SECRET_KEY": secrets.token_urlsafe(50),
     "POSTGRES_SSLMODE": "require",
 }
-
-
-def run_in_new_process(args: list[str], **environment: str) -> subprocess.CompletedProcess[str]:
-    """Load the settings in a new process, the way a container loads them at startup."""
-    # Nothing here connects to the database, but the settings require a password.
-    env = {
-        **os.environ,
-        "DJANGO_SECRET_KEY": "test-secret-key",
-        "POSTGRES_PASSWORD": "unused",
-        **environment,
-    }
-    # The tests pass fixed arguments, never outside input.
-    return subprocess.run(  # noqa: S603
-        [sys.executable, *args],
-        cwd=BACKEND_DIR,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
 
 def load_settings(*names: str, **environment: str) -> dict:

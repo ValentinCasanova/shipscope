@@ -68,11 +68,14 @@ Settings come from environment variables. Compose passes the repo-root `.env` to
 | `DJANGO_SECRET_KEY` | backend | Random, generated per machine | Required |
 | `DJANGO_DEBUG` | backend | `true` | `false` when unset |
 | `DJANGO_ALLOWED_HOSTS` | backend | `localhost,127.0.0.1` | Comma-separated host names Django serves |
+| `DJANGO_BEHIND_CLOUDFRONT` | backend | Not set | `true` in AWS: trust CloudFront's `CloudFront-Forwarded-Proto` header to tell whether the browser used HTTPS. Only safe where nothing but CloudFront can reach the app. |
 | `POSTGRES_DB` | db, backend | `shipscope` | |
 | `POSTGRES_USER` | db, backend | `shipscope` | |
 | `POSTGRES_PASSWORD` | db, backend | `shipscope-local` | Required. For local use only. |
 | `POSTGRES_HOST` | backend | `localhost` | Compose sets `db` for the backend container |
 | `POSTGRES_PORT` | backend | `5432` | |
+| `POSTGRES_SSLMODE` | backend | Not set | TLS for the database connection: `prefer` (use it if the server offers it) when unset, `require` in AWS |
+| `ECS_CONTAINER_METADATA_URI_V4` | backend | Not set | Set by ECS. The backend reads the task's private IP from it and allows that IP as a host name, because load balancer health checks use it. |
 | `API_PROXY_TARGET` | Vite dev server | Not set | Where the dev server forwards `/api/` requests: `http://localhost:8000` when unset, and Compose sets `http://backend:8000`. It comes from the dev server's environment, not from `.env`. |
 
 ## Working on your machine

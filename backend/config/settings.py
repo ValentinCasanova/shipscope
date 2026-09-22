@@ -9,6 +9,8 @@ from pathlib import Path
 import environ
 from django.core.exceptions import ImproperlyConfigured
 
+from .ecs import task_private_ips
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env()
@@ -25,7 +27,28 @@ SECRET_KEY = env("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     raise ImproperlyConfigured("The DJANGO_SECRET_KEY environment variable is empty")
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
-ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=[])
+# On ECS, also the task's private IP, which load balancer health checks use as the host.
+ALLOWED_HOSTS = [*env.list("DJANGO_ALLOWED_HOSTS", default=[]), *task_private_ips()]
+
+
+# HTTPS
+
+# Browsers then send these cookies only over HTTPS. Local development uses plain HTTP,
+# with DEBUG on.
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+
+# In AWS, CloudFront handles HTTPS and reaches the app over plain HTTP, so Django can't
+# tell on its own that the browser used HTTPS. CloudFront sends the viewer's protocol in
+# CloudFront-Forwarded-Proto, and it redirects plain-HTTP viewers instead of forwarding
+# their requests. Only CloudFront can reach the load balancer, so no client can set this
+# header on a plain-HTTP request. Trusting it makes request.is_secure() true, so Django's
+# CSRF check accepts the browser's https:// Origin.
+if env.bool("DJANGO_BEHIND_CLOUDFRONT", default=False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_CLOUDFRONT_FORWARDED_PROTO", "https")
+    # CloudFront also does the HTTPS redirect and adds the HSTS header, the two things
+    # these deployment checks want Django to do.
+    SILENCED_SYSTEM_CHECKS = ["security.W004", "security.W008"]
 
 
 # Application definition
@@ -84,9 +107,16 @@ DATABASES = {
         "PASSWORD": env("POSTGRES_PASSWORD"),
         "HOST": env("POSTGRES_HOST", default="localhost"),
         "PORT": env.int("POSTGRES_PORT", default=5432),
-        # Fail within seconds when the database is unreachable, instead of waiting
-        # minutes for the operating system's TCP connect timeout.
-        "OPTIONS": {"connect_timeout": 5},
+        "OPTIONS": {
+            # Fail within seconds when the database is unreachable, instead of waiting
+            # minutes for the operating system's TCP connect timeout.
+            "connect_timeout": 5,
+            # "prefer" uses TLS when the server offers it, which the local Postgres
+            # container doesn't. AWS sets "require", so the connection to RDS is never
+            # unencrypted. Neither checks the server's certificate; "verify-full" would
+            # also need RDS's certificate bundle in the image.
+            "sslmode": env("POSTGRES_SSLMODE", default="prefer"),
+        },
     },
 }
 

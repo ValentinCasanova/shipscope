@@ -24,3 +24,28 @@ output "database_address" {
   description = "Host name of the database."
   value       = module.environment.database_address
 }
+
+output "cluster_name" {
+  description = "Name of the ECS cluster."
+  value       = module.environment.cluster_name
+}
+
+output "service_name" {
+  description = "Name of the API's ECS service."
+  value       = module.environment.service_name
+}
+
+output "task_definition_arn" {
+  description = "The newest task definition revision. Releases run migrations on it and then switch the service to it."
+  value       = module.environment.task_definition_arn
+}
+
+output "log_group_name" {
+  description = "CloudWatch Logs group of the API and of one-off tasks."
+  value       = module.environment.log_group_name
+}
+
+output "load_balancer_dns_name" {
+  description = "DNS name of the internal load balancer."
+  value       = module.environment.load_balancer_dns_name
+}

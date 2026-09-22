@@ -3,11 +3,13 @@
 module "environment" {
   source = "../../modules/environment"
 
-  environment = "staging"
-  vpc_cidr    = "10.10.0.0/16"
+  environment   = "staging"
+  backend_image = var.backend_image
+  vpc_cidr      = "10.10.0.0/16"
 
   deletion_protection         = false
   db_backup_retention_days    = 1
   db_final_snapshot           = false
   secret_recovery_window_days = 0
+  log_retention_days          = 14
 }

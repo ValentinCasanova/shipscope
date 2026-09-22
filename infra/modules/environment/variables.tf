@@ -8,6 +8,16 @@ variable "environment" {
   }
 }
 
+variable "backend_image" {
+  description = "Backend image to register in the task definition, by digest: <repository URL>@sha256:<digest>."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@:]+(:[0-9]+)?/[^@]+@sha256:[0-9a-f]{64}$", var.backend_image))
+    error_message = "backend_image must reference an image by digest, as <repository URL>@sha256:<digest>, never by tag."
+  }
+}
+
 variable "vpc_cidr" {
   description = "IPv4 range of the environment's VPC, a /16. Each environment gets its own, so the two can be peered later."
   type        = string
@@ -44,4 +54,9 @@ variable "secret_recovery_window_days" {
     condition     = var.secret_recovery_window_days == 0 || (var.secret_recovery_window_days >= 7 && var.secret_recovery_window_days <= 30)
     error_message = "secret_recovery_window_days must be 0 or between 7 and 30."
   }
+}
+
+variable "log_retention_days" {
+  description = "Days to keep the API's logs in CloudWatch Logs."
+  type        = number
 }

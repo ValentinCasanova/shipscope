@@ -22,3 +22,28 @@ output "database_address" {
   description = "Host name of the database."
   value       = aws_db_instance.main.address
 }
+
+output "cluster_name" {
+  description = "Name of the ECS cluster."
+  value       = aws_ecs_cluster.main.name
+}
+
+output "service_name" {
+  description = "Name of the API's ECS service."
+  value       = aws_ecs_service.api.name
+}
+
+output "task_definition_arn" {
+  description = "The newest task definition revision, which runs backend_image. Releases run migrations on it and then switch the service to it."
+  value       = aws_ecs_task_definition.api.arn
+}
+
+output "log_group_name" {
+  description = "CloudWatch Logs group of the API and of one-off tasks."
+  value       = aws_cloudwatch_log_group.api.name
+}
+
+output "load_balancer_dns_name" {
+  description = "DNS name of the internal load balancer. It resolves to private addresses only."
+  value       = aws_lb.api.dns_name
+}

@@ -59,6 +59,21 @@ To create the stack in a new account, the state has to start locally, because th
 3. Run `terraform -chdir=infra/bootstrap init -migrate-state` and answer `yes` to copy the state into the bucket. Delete `bootstrap/terraform.tfstate` and `bootstrap/terraform.tfstate.backup`.
 4. Put the same bucket name in each environment's `backend.tf`.
 
+## Deploying
+
+The pipeline runs these steps for every merge to `main`. You can run the same commands from your machine, for example if GitHub Actions is down. Sign in first, and run `terraform -chdir=infra/environments/<environment> init` once, because the scripts read Terraform outputs.
+
+1. Build the backend image and push it to ECR, tagged `git-<commit SHA>`. Tags are immutable, so a tag always means the image first pushed with it.
+2. `terraform -chdir=infra/environments/staging apply -var "backend_image=<repository URL>@sha256:<digest>"` registers a task definition revision for the image. Nothing restarts yet: the service ignores new revisions until step 4.
+3. `infra/scripts/run-migrations.sh staging` runs `manage.py migrate` as a one-off task on the new revision and fails unless it exits 0.
+4. `infra/scripts/roll-out-backend.sh staging` switches the service to the new revision and waits until ECS reports the deployment `SUCCESSFUL`. If new tasks keep failing, the circuit breaker rolls back to the previous revision, and the script fails.
+5. `infra/scripts/publish-frontend.sh staging frontend/dist` uploads a `npm run build` output and invalidates CloudFront's cache.
+6. `infra/scripts/smoke-test.sh staging` checks the API, the database, and the page through CloudFront.
+
+Migrations run before the new code takes traffic, but the old tasks keep serving during the rollout, so a migration must work with the previous release too: add a column as nullable, and drop it a release later.
+
+Terraform needs the image for every plan. To plan without changing it, pass the one that's running: `-var "backend_image=$(infra/scripts/deployed-image.sh staging)"`.
+
 ## Checks
 
 Run these from the repository root. None of them need AWS credentials.

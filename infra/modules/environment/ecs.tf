@@ -89,8 +89,10 @@ resource "aws_ecs_service" "api" {
   task_definition        = aws_ecs_task_definition.api.arn
   desired_count          = 1
   launch_type            = "FARGATE"
-  platform_version       = "LATEST"
   enable_execute_command = true
+
+  # No platform_version: Fargate then uses the latest, and a fixed "LATEST" would show
+  # as a change in every plan once a deployment records the resolved version, "1.4.0".
 
   # Tag tasks like the service, so Cost Explorer can split Fargate costs by environment.
   enable_ecs_managed_tags = true

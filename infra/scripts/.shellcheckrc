@@ -1,0 +1,3 @@
+# Follow the `source lib.sh` lines, resolved next to each script.
+external-sources=true
+source-path=SCRIPTDIR

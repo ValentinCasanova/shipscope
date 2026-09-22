@@ -49,3 +49,18 @@ output "load_balancer_dns_name" {
   description = "DNS name of the internal load balancer."
   value       = module.environment.load_balancer_dns_name
 }
+
+output "cloudfront_domain" {
+  description = "The environment's public domain, d….cloudfront.net."
+  value       = module.environment.cloudfront_domain
+}
+
+output "cloudfront_distribution_id" {
+  description = "ID of the CloudFront distribution, for cache invalidations."
+  value       = module.environment.cloudfront_distribution_id
+}
+
+output "frontend_bucket" {
+  description = "S3 bucket that holds the frontend build."
+  value       = module.environment.frontend_bucket
+}

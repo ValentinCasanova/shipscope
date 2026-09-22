@@ -47,3 +47,18 @@ output "load_balancer_dns_name" {
   description = "DNS name of the internal load balancer. It resolves to private addresses only."
   value       = aws_lb.api.dns_name
 }
+
+output "cloudfront_domain" {
+  description = "The environment's public domain, d….cloudfront.net."
+  value       = aws_cloudfront_distribution.main.domain_name
+}
+
+output "cloudfront_distribution_id" {
+  description = "ID of the CloudFront distribution, for cache invalidations."
+  value       = aws_cloudfront_distribution.main.id
+}
+
+output "frontend_bucket" {
+  description = "S3 bucket that holds the frontend build."
+  value       = aws_s3_bucket.frontend.bucket
+}

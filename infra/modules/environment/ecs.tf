@@ -20,9 +20,10 @@ resource "aws_cloudwatch_log_group" "api" {
 
 locals {
   api_environment = {
+    # Requests arrive through CloudFront, with the browser's Host header.
+    DJANGO_ALLOWED_HOSTS     = aws_cloudfront_distribution.main.domain_name
+    DJANGO_BEHIND_CLOUDFRONT = "true"
     DJANGO_DEBUG             = "false"
-    DJANGO_ALLOWED_HOSTS     = ""
-    DJANGO_BEHIND_CLOUDFRONT = "false"
     DJANGO_LOG_FORMAT        = "json"
     POSTGRES_HOST            = aws_db_instance.main.address
     POSTGRES_PORT            = tostring(aws_db_instance.main.port)

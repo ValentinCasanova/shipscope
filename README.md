@@ -20,6 +20,7 @@ To run tests, linters, and git hooks on your machine you also need:
 | [uv](https://docs.astral.sh/uv/) | 0.12 | Installs Python 3.14 (from `backend/.python-version`) if you don't have it |
 | [Node.js](https://nodejs.org/) | 24.15 or a later 24.x | `.nvmrc` selects Node 24 for `nvm use` |
 | [pre-commit](https://pre-commit.com/) | 4.x | For example, `uv tool install pre-commit` |
+| [Terraform](https://developer.hashicorp.com/terraform/install) | 1.16 | For the `terraform fmt` hook and the infrastructure in `infra/` |
 
 ## Quickstart
 
@@ -113,7 +114,9 @@ Run these in `frontend/`.
 
 ### Git hooks
 
-Every commit runs file checks, [gitleaks](https://github.com/gitleaks/gitleaks) secret scanning, Ruff, Prettier, and ESLint. To run every hook on the whole repository, use `pre-commit run --all-files`. The hooks call `uv`, `node`, and `npm`, so commit from a terminal where those commands work.
+Every commit runs file checks, [gitleaks](https://github.com/gitleaks/gitleaks) secret scanning, Ruff, Prettier, and ESLint, and for the files it touches, `terraform fmt`, [actionlint](https://github.com/rhysd/actionlint) for GitHub Actions workflows, and [ShellCheck](https://www.shellcheck.net/) for shell scripts. To run every hook on the whole repository, use `pre-commit run --all-files`. The hooks call `uv`, `node`, `npm`, and `terraform`, and actionlint runs in Docker, so commit from a terminal where those commands work.
+
+The gitleaks hook scans only the changes being committed. To scan every commit in the history, as CI does, run `pre-commit run --hook-stage manual gitleaks-history`.
 
 ## API
 
@@ -145,7 +148,7 @@ The frontend has no production container: `npm run build` produces static files,
 |---|---|
 | `backend/` | Django REST API, managed with uv. `config/` holds the settings and URL routes, and `core/` the health endpoint. |
 | `frontend/` | React + TypeScript app built with Vite. `src/api/` holds the typed API client, and `src/components/` the UI. |
-| `infra/` | Terraform for the AWS environments (not written yet) |
+| `infra/` | Terraform for the AWS environments. See [`infra/README.md`](infra/README.md). |
 | `docker-compose.yml` | The local development stack |
 | `.env.example` | Template for your local `.env` |
 | `.pre-commit-config.yaml` | Git hooks |
@@ -169,5 +172,5 @@ The frontend has no production container: `npm run build` produces static files,
 | Docker volumes use more and more disk space | `docker compose down` and `up -V` leave the frontend's previous `node_modules` volume behind, about 160 MB each time | `docker volume prune` deletes unused anonymous volumes from every project on your machine, and keeps named volumes such as the database's |
 | Code with type errors passes `tsc --noEmit` | The root `tsconfig.json` only references the other two configs, so `tsc --noEmit` checks no files | Use `npm run typecheck`, which runs `tsc -b` |
 | npm reports a peer-dependency conflict with typescript-eslint | TypeScript 7 got installed, but typescript-eslint supports only versions below 6.1 | Keep `typescript` at `~6.0` in `package.json` |
-| A git hook fails with `command not found` | The one-time setup hasn't run, or the git client can't find `uv`, `node`, or `npm` (for example, a GUI app that doesn't load nvm) | Run the setup in [Working on your machine](#working-on-your-machine), and commit from a terminal |
+| A git hook fails with `command not found` | The one-time setup hasn't run, or the git client can't find `uv`, `node`, `npm`, or `terraform` (for example, a GUI app that doesn't load nvm) | Run the setup in [Working on your machine](#working-on-your-machine), and commit from a terminal |
 | A frontend test of an error state is slow or times out | TanStack Query retries a failed query 3 times by default | Render with `renderWithQueryClient` from `src/test/render.tsx`, which turns retries off |

@@ -24,9 +24,13 @@ npm-debug.log*
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfplan
 *.tfvars
+*.tfvars.json
 !*.tfvars.example
 crash.log
+# Only root configurations keep a lock file; a module uses its caller's.
+infra/modules/**/.terraform.lock.hcl
 
 # Editors / OS
 .idea/

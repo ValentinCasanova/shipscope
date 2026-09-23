@@ -6,6 +6,11 @@
 # up. To rotate one, raise its version and apply; the database password then changes
 # in the secret and in RDS in the same run. Running tasks keep the old value until they
 # are replaced, so roll out the service afterwards.
+#
+# RDS takes its password from the secret (below), not from the generated value directly.
+# That way an apply always gives the database the password the tasks are handed, even
+# when a previous run was interrupted between writing the secret and creating the
+# database, or when the database is imported into a new state.
 
 locals {
   django_secret_key_version = 1
@@ -44,6 +49,13 @@ resource "aws_secretsmanager_secret_version" "db_password" {
   secret_id                = aws_secretsmanager_secret.db_password.id
   secret_string_wo         = ephemeral.random_password.db_password.result
   secret_string_wo_version = local.db_password_version
+}
+
+ephemeral "aws_secretsmanager_secret_version" "db_password" {
+  secret_id = aws_secretsmanager_secret.db_password.id
+
+  # Read the value only after this run has written it, if the version went up.
+  depends_on = [aws_secretsmanager_secret_version.db_password]
 }
 
 # EasyPost, Google, and Anthropic keys, as fields of one JSON object, set by hand in

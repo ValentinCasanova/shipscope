@@ -27,7 +27,7 @@ resource "aws_db_instance" "main" {
 
   db_name             = "shipscope"
   username            = "shipscope"
-  password_wo         = ephemeral.random_password.db_password.result
+  password_wo         = ephemeral.aws_secretsmanager_secret_version.db_password.secret_string
   password_wo_version = local.db_password_version
 
   db_subnet_group_name   = aws_db_subnet_group.main.name

@@ -1,10 +1,14 @@
 # ShipScope
 
+[![pipeline](https://github.com/ValentinCasanova/shipscope/actions/workflows/pipeline.yml/badge.svg?branch=main)](https://github.com/ValentinCasanova/shipscope/actions/workflows/pipeline.yml?query=branch%3Amain)
+
 A rate-shopping and order-sync dashboard: sign in with Google, connect a Google Sheet of orders, compare live carrier rates via EasyPost, and flag unusual orders with a small LLM tool-call.
 
 **Stack:** React + TypeScript (Vite) · Django REST Framework · PostgreSQL · Docker · AWS (ECS Fargate, RDS, S3 + CloudFront) via Terraform · GitHub Actions
 
-> **Status: foundation.** The local development environment works end to end: PostgreSQL, a Django API with a health endpoint, and a React page that shows whether the API and the database are up. The product features and the AWS deployment come next.
+> **Status: deployed.** The first slice, a Django API with a health endpoint and a React page that shows whether the API and the database are up, runs locally and in AWS. Every merge to `main` is linted, tested, and built, then deployed to staging, and to prod after approval. The product features come next.
+>
+> **Live:** https://d3jrvwjgno9gs0.cloudfront.net
 
 ## Prerequisites
 
@@ -55,7 +59,7 @@ Open http://localhost:5173. The page shows **API: ok** and **Database: ok**. htt
 browser ──► frontend :5173 (Vite) ──/api/*──► backend :8000 (Django) ──► db :5432 (PostgreSQL)
 ```
 
-The React app calls the API with relative `/api/...` URLs, and the Vite dev server forwards those requests to the backend. The page and the API share one origin, so the browser never makes a cross-origin request and the API needs no CORS configuration. In deployed environments, CloudFront will take over the dev server's role: it will serve the built frontend and forward `/api/*` to the API.
+The React app calls the API with relative `/api/...` URLs, and the Vite dev server forwards those requests to the backend. The page and the API share one origin, so the browser never makes a cross-origin request and the API needs no CORS configuration. In AWS, CloudFront takes over the dev server's role: it serves the built frontend and forwards `/api/*` to the API ([Deployment](#deployment)).
 
 The `backend/` and `frontend/` folders are mounted into their containers, so the containers run your working copy. The frontend container keeps its own `node_modules` in a separate volume. Ports are published on 127.0.0.1 only, so other machines on your network can't reach them.
 
@@ -132,7 +136,7 @@ The health endpoint returns 200 whenever the Django process is running, even whi
 
 ## Production image
 
-`backend/Dockerfile` builds the image that deployed environments will run. A builder stage installs the locked dependencies into a virtualenv. The runtime stage copies in only that virtualenv and the code, collects static files, and runs Gunicorn as a non-root user. Compose builds the same image and replaces Gunicorn with Django's development server.
+`backend/Dockerfile` builds the image that the AWS environments run. A builder stage installs the locked dependencies into a virtualenv. The runtime stage copies in only that virtualenv and the code, collects static files, and runs Gunicorn as a non-root user. Compose builds the same image and replaces Gunicorn with Django's development server.
 
 To build it and run it against the Compose database, start `db` (`docker compose up -d db`), then run:
 
@@ -144,7 +148,38 @@ docker run --rm --network shipscope_default -p 127.0.0.1:8001:8000 \
 
 Gunicorn then serves http://localhost:8001/api/health/. It starts one worker unless `WEB_CONCURRENCY` is set. To see the logs as AWS gets them, one JSON object per line, add `-e DJANGO_LOG_FORMAT=json`; `backend/gunicorn.conf.py` applies the same format to Gunicorn's own logs. The image is about 230 MB unpacked, 143 MB of it the `python:3.14-slim` base, and 64 MB compressed.
 
-The frontend has no production container: `npm run build` produces static files, and `frontend/Dockerfile.dev` exists only for local development.
+The frontend has no production container: `npm run build` produces static files, which CloudFront serves from S3, and `frontend/Dockerfile.dev` exists only for local development.
+
+## Deployment
+
+The app runs in two AWS environments, staging and prod, which Terraform builds from one module in [`infra/`](infra/). In each one, CloudFront serves the React build from S3 and forwards `/api/*`, `/admin/*`, and `/static/*` to Django on ECS Fargate behind an internal load balancer, and PostgreSQL runs on RDS. CloudFront is the only part reachable from the internet. The page and the API share its domain, just as they share the Vite dev server's address locally.
+
+| Environment | URL | Deployed |
+|---|---|---|
+| Prod | https://d3jrvwjgno9gs0.cloudfront.net | After approval, with the release staging just ran |
+| Staging | A new one each time staging is recreated | Automatically, on every merge to `main`. Between work sessions, staging is removed to save its running cost, and the next release recreates it. |
+
+The pipeline, [`.github/workflows/pipeline.yml`](.github/workflows/pipeline.yml), runs on every pull request and every push to `main`:
+
+```text
+lint ─┬─ test-backend  ─┬─ build-backend  ─┬─ deploy-staging ── deploy-prod
+      └─ test-frontend ─┴─ build-frontend ─┘    (main only)     (after approval)
+```
+
+| Job | What it does |
+|---|---|
+| `lint` | Runs the git hooks on every file, scans every commit for secrets, type-checks the frontend, and validates and lints the Terraform |
+| `test-backend` | Runs pytest against PostgreSQL 17, including Django's deployment checklist with the deployed settings, and checks that every model change has a migration |
+| `test-frontend` | Runs Vitest |
+| `build-backend` | Builds the production image. On `main`, it pushes the image to ECR, tagged with the commit SHA, and both environments deploy it by digest. |
+| `build-frontend` | Runs `npm run build`. Both environments get this same build. |
+| `deploy-staging`, `deploy-prod` | Terraform registers the new image, migrations run as a one-off task, and the service switches over, rolling itself back if the new tasks fail. Then the frontend is published, and a smoke test checks the environment through CloudFront. |
+
+- GitHub Actions signs in to AWS through OIDC, so GitHub stores no AWS keys, and the pipeline can't change its own permissions.
+- `main` changes only through pull requests, which need `lint`, both test jobs, and both build jobs to pass, and which are squash-merged.
+- Every action is pinned to a full commit SHA, and Dependabot proposes updates weekly.
+
+[`infra/README.md`](infra/README.md) covers the architecture, how a release works, rolling back, deploying by hand, parking staging, and costs: about $45 a month per environment.
 
 ## Repository layout
 
@@ -152,7 +187,8 @@ The frontend has no production container: `npm run build` produces static files,
 |---|---|
 | `backend/` | Django REST API, managed with uv. `config/` holds the settings and URL routes, and `core/` the health endpoint. |
 | `frontend/` | React + TypeScript app built with Vite. `src/api/` holds the typed API client, and `src/components/` the UI. |
-| `infra/` | Terraform for the AWS environments. See [`infra/README.md`](infra/README.md). |
+| `infra/` | Terraform and deploy scripts for the AWS environments. See [`infra/README.md`](infra/README.md). |
+| `.github/` | The GitHub Actions pipeline and Dependabot's configuration |
 | `docker-compose.yml` | The local development stack |
 | `.env.example` | Template for your local `.env` |
 | `.pre-commit-config.yaml` | Git hooks |
@@ -177,4 +213,6 @@ The frontend has no production container: `npm run build` produces static files,
 | Code with type errors passes `tsc --noEmit` | The root `tsconfig.json` only references the other two configs, so `tsc --noEmit` checks no files | Use `npm run typecheck`, which runs `tsc -b` |
 | npm reports a peer-dependency conflict with typescript-eslint | TypeScript 7 got installed, but typescript-eslint supports only versions below 6.1 | Keep `typescript` at `~6.0` in `package.json` |
 | A git hook fails with `command not found` | The one-time setup hasn't run, or the git client can't find `uv`, `node`, `npm`, or `terraform` (for example, a GUI app that doesn't load nvm) | Run the setup in [Working on your machine](#working-on-your-machine), and commit from a terminal |
+| `makemigrations --check` reports `No changes detected` although a model changed | The app has no `migrations` package, and without an app label `makemigrations` skips such apps | Keep a `migrations/__init__.py` in every app, as `startapp` creates |
+| Pushing a change to `.github/workflows/` fails with `refusing to allow an OAuth App to create or update workflow … without workflow scope` | git pushed over HTTPS with the GitHub CLI's token, which lacks the `workflow` scope | Push over SSH, or run `gh auth refresh -s workflow` |
 | A frontend test of an error state is slow or times out | TanStack Query retries a failed query 3 times by default | Render with `renderWithQueryClient` from `src/test/render.tsx`, which turns retries off |

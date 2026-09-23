@@ -1,0 +1,265 @@
+# Lints, tests, and builds every pull request and every push to main.
+#
+#   lint ─┬─ test-backend  ─┬─ build-backend    pushes the image to ECR on main only
+#         └─ test-frontend ─┴─ build-frontend   uploads dist/ as an artifact
+#
+# Every action is pinned to a full commit SHA, with its version in a comment, and
+# Dependabot keeps the pins current (.github/dependabot.yml).
+
+name: pipeline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Jobs that need more ask for it themselves.
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the pull request's older run. Every other run
+# gets a group of its own, so nothing on main is ever cancelled.
+concurrency:
+  group: pipeline-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the secret scan reads every commit
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: 0.12.13
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.2
+          terraform_wrapper: false
+
+      # The git hooks run Ruff, Prettier, and ESLint from these, as on your machine.
+      - name: Install backend and frontend dependencies
+        run: |
+          uv sync --locked --project backend
+          npm ci --prefix frontend
+      - name: Cache the git hooks' environments
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Install pre-commit
+        run: uv tool install pre-commit==4.6.2
+
+      # Ruff, Prettier, ESLint, file checks, terraform fmt, actionlint, and shellcheck.
+      - name: Run the git hooks on every file
+        run: pre-commit run --all-files --show-diff-on-failure
+      # The commit hook's gitleaks only scans staged changes, and nothing is staged here.
+      - name: Scan every commit for secrets
+        run: pre-commit run --hook-stage manual gitleaks-history
+
+      - name: Type-check the frontend
+        run: npm --prefix frontend run typecheck
+
+      - name: Validate Terraform
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugins
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          for root in infra/bootstrap infra/environments/staging infra/environments/prod; do
+            terraform -chdir="$root" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$root" validate
+          done
+
+      # The container image infra/README.md uses. tflint downloads its plugins through
+      # GitHub's API, which rate-limits anonymous requests from shared runner addresses.
+      - name: Lint Terraform
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tflint() {
+            docker run --rm -e GITHUB_TOKEN -v "$PWD/infra:/data" -v tflint-plugins:/root/.tflint.d \
+              ghcr.io/terraform-linters/tflint:v0.64.0 --config=/data/.tflint.hcl "$@"
+          }
+          tflint --init
+          tflint --recursive
+
+  test-backend:
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      # The same major version as RDS and docker-compose.yml.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: shipscope
+          POSTGRES_USER: shipscope
+          POSTGRES_PASSWORD: shipscope-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U shipscope -d shipscope"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PASSWORD: shipscope-ci
+      DJANGO_SECRET_KEY: ci-only-not-a-secret
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: 0.12.13
+      - name: Install dependencies
+        run: uv sync --locked
+      # Includes `manage.py check --deploy` with the task definition's settings
+      # (config/tests/test_settings.py).
+      - name: Run the tests
+        run: uv run pytest
+      - name: Check that every model change has a migration
+        run: uv run python manage.py makemigrations --check --dry-run
+
+  test-frontend:
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run the tests
+        run: npm test
+
+  build-backend:
+    needs: [test-backend, test-frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # signs in to AWS with OIDC, on main only
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    env:
+      # Pull requests only build the image. Main also pushes it, tagged
+      # git-<commit SHA>, and releases deploy it by digest.
+      RELEASE: ${{ github.ref == 'refs/heads/main' }}
+      REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+      REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      TAG: git-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The role trusts only runs for main.
+      - name: Sign in to AWS
+        if: env.RELEASE == 'true'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          # CloudTrail then shows which run did what.
+          role-session-name: github-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Tags are immutable, so a re-run can't push git-<commit SHA> a second time.
+      # It reuses the image the first attempt pushed instead.
+      - name: Look for an image this commit already pushed
+        id: existing
+        if: env.RELEASE == 'true'
+        run: |
+          if digest=$(aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag="$TAG" \
+            --query 'imageDetails[0].imageDigest' --output text 2>"$RUNNER_TEMP/describe-images.err"); then
+            echo "Reusing $REPOSITORY:$TAG, $digest"
+            echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          elif ! grep -q ImageNotFoundException "$RUNNER_TEMP/describe-images.err"; then
+            cat "$RUNNER_TEMP/describe-images.err" >&2
+            exit 1
+          fi
+
+      - name: Sign in to ECR
+        if: env.RELEASE == 'true' && steps.existing.outputs.digest == ''
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: steps.existing.outputs.digest == ''
+      - name: Build the image, and push it on main
+        id: build
+        if: steps.existing.outputs.digest == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: backend
+          target: runtime
+          platforms: linux/amd64
+          # One image manifest. Attestations would show up in ECR as extra untagged
+          # images.
+          provenance: false
+          sbom: false
+          # Check for a newer base image, which brings security fixes.
+          pull: true
+          push: ${{ env.RELEASE == 'true' }}
+          tags: ${{ env.RELEASE == 'true' && format('{0}/{1}:{2}', env.REGISTRY, env.REPOSITORY, env.TAG) || '' }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Output the image by digest
+        id: image
+        if: env.RELEASE == 'true'
+        env:
+          DIGEST: ${{ steps.existing.outputs.digest || steps.build.outputs.digest }}
+        run: |
+          echo "image=$REGISTRY/$REPOSITORY@$DIGEST" >>"$GITHUB_OUTPUT"
+          echo "Backend image: \`$REPOSITORY:$TAG\`, \`$DIGEST\`" >>"$GITHUB_STEP_SUMMARY"
+
+  build-frontend:
+    needs: [test-backend, test-frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      # Every environment gets this same build. The app calls the API on its own
+      # origin, so the build holds nothing environment-specific.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error

@@ -3,7 +3,7 @@
 module "environment" {
   source = "../../modules/environment"
 
-  environment   = "staging"
+  environment = "staging"
   backend_image = var.backend_image
   vpc_cidr      = "10.10.0.0/16"
 

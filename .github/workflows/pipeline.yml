@@ -1,7 +1,9 @@
-# Lints, tests, and builds every pull request and every push to main.
+# Lints, tests, and builds every pull request and every push to main. On main it then
+# releases: staging deploys on its own, and prod after you approve, both from the same
+# backend image and the same frontend build.
 #
-#   lint ─┬─ test-backend  ─┬─ build-backend    pushes the image to ECR on main only
-#         └─ test-frontend ─┴─ build-frontend   uploads dist/ as an artifact
+#   lint ─┬─ test-backend  ─┬─ build-backend  ─┬─ deploy-staging ── deploy-prod
+#         └─ test-frontend ─┴─ build-frontend ─┘    (main only)     (your approval)
 #
 # Every action is pinned to a full commit SHA, with its version in a comment, and
 # Dependabot keeps the pins current (.github/dependabot.yml).
@@ -20,7 +22,8 @@ permissions:
   contents: read
 
 # A new push to a pull request cancels the pull request's older run. Every other run
-# gets a group of its own, so nothing on main is ever cancelled.
+# gets a group of its own, so nothing on main is ever cancelled; deploys queue per
+# environment instead (deploy.yml).
 concurrency:
   group: pipeline-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
@@ -263,3 +266,28 @@ jobs:
           name: frontend-dist
           path: frontend/dist
           if-no-files-found: error
+
+  deploy-staging:
+    needs: [build-backend, build-frontend]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write # deploy.yml signs in to AWS with OIDC
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      image: ${{ needs.build-backend.outputs.image }}
+      frontend-artifact: frontend-dist
+
+  # Waits for your approval: the prod environment requires it.
+  deploy-prod:
+    needs: [build-backend, deploy-staging]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write # deploy.yml signs in to AWS with OIDC
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: prod
+      image: ${{ needs.build-backend.outputs.image }}
+      frontend-artifact: frontend-dist

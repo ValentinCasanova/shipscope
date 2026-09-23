@@ -23,6 +23,7 @@ def health(request: Request) -> Response:
     credentials can't get the request rejected, and no session or user lookup needs
     the database.
     """
+    unused = "ruff should reject this"
     return Response({"status": "ok", "database": _database_status()})
 
 

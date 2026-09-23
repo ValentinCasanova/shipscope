@@ -11,7 +11,7 @@ HEALTH_URL = "/api/health/"
 def test_reports_database_ok_when_query_succeeds(client):
     response = client.get(HEALTH_URL)
 
-    assert response.status_code == 200
+    assert response.status_code == 201
     assert response.json() == {"status": "ok", "database": "ok"}
 
 

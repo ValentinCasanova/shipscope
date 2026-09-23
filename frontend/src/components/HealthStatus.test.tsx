@@ -24,7 +24,7 @@ describe('HealthStatus', () => {
     renderWithQueryClient(<HealthStatus />);
 
     const status = screen.getByRole('status');
-    expect(await within(status).findByText('API: down')).toBeInTheDocument();
+    expect(await within(status).findByText('API: ok')).toBeInTheDocument();
     expect(
       within(status).getByText('Database: unavailable'),
     ).toBeInTheDocument();

@@ -1,0 +1,119 @@
+# Deploys one environment with the release sequence from infra/README.md: Terraform
+# registers a task definition revision for the image, migrations run on it, the service
+# switches to it, and the frontend is published. pipeline.yml calls this for staging on
+# every push to main, then for prod once you approve.
+#
+# Re-running a finished deploy job redeploys that run's image and Terraform
+# configuration, which is how you roll back.
+
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: staging or prod. Also the GitHub environment, whose deploy role the job assumes.
+        type: string
+        required: true
+      image:
+        description: The backend image by digest, <repository URL>@sha256:<digest>.
+        type: string
+        required: true
+      frontend-artifact:
+        description: Name of this run's artifact with the frontend build.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.url.outputs.url }}
+    # One deploy per environment at a time, never cancelled halfway. While one runs, the
+    # newest waiting deploy replaces any older one that's still waiting.
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # signs in to AWS with OIDC
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      BACKEND_IMAGE: ${{ inputs.image }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The deploy role trusts only jobs in its own GitHub environment, and a prod job
+      # starts only after you approve it.
+      - name: Sign in to AWS
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          # CloudTrail then shows which run did what.
+          role-session-name: github-${{ github.run_id }}-${{ github.run_attempt }}
+          # The role's maximum. Recreating a parked environment takes about 25 minutes.
+          role-duration-seconds: 7200
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.2
+          # The scripts read Terraform outputs, which the wrapper would decorate.
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: terraform -chdir="infra/environments/$ENVIRONMENT" init -lockfile=readonly
+
+      # Applies exactly the plan shown here. Nothing restarts yet: the service ignores new
+      # task definition revisions until the rollout below.
+      - name: Terraform plan
+        run: terraform -chdir="infra/environments/$ENVIRONMENT" plan -out=release.tfplan -var "backend_image=$BACKEND_IMAGE"
+      - name: Terraform apply
+        run: terraform -chdir="infra/environments/$ENVIRONMENT" apply release.tfplan
+
+      - name: Read the environment's URL
+        id: url
+        run: echo "url=https://$(terraform -chdir="infra/environments/$ENVIRONMENT" output -raw cloudfront_domain)" >>"$GITHUB_OUTPUT"
+
+      # Before the rollout, so new code never runs against an old schema.
+      - name: Run migrations
+        run: infra/scripts/run-migrations.sh "$ENVIRONMENT"
+
+      # Fails if the circuit breaker rolls the deployment back.
+      - name: Roll out the backend
+        run: infra/scripts/roll-out-backend.sh "$ENVIRONMENT"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.frontend-artifact }}
+          path: ${{ runner.temp }}/frontend-dist
+      - name: Publish the frontend
+        run: infra/scripts/publish-frontend.sh "$ENVIRONMENT" "$RUNNER_TEMP/frontend-dist"
+
+      - name: Smoke test
+        run: infra/scripts/smoke-test.sh "$ENVIRONMENT"
+
+      - name: Summarize the deployment
+        env:
+          URL: ${{ steps.url.outputs.url }}
+        run: |
+          task_definition=$(terraform -chdir="infra/environments/$ENVIRONMENT" output -raw task_definition_arn)
+          cat >>"$GITHUB_STEP_SUMMARY" <<EOF
+          ### Deployed $ENVIRONMENT
+
+          | | |
+          |---|---|
+          | URL | $URL |
+          | Backend image | \`${BACKEND_IMAGE#*@}\` |
+          | Task definition | \`${task_definition##*/}\` |
+          EOF

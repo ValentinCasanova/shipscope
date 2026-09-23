@@ -1,0 +1,18 @@
+# Weekly pull requests that move the pinned GitHub Actions to their newest releases,
+# updating each commit SHA and its version comment together. Dependabot waits until a
+# release is a week old, so a compromised release has time to be noticed and pulled.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+    # Pull request titles become the squash-merge commit subjects: ci: bump ….
+    commit-message:
+      prefix: ci

@@ -167,7 +167,7 @@ The pipeline builds the backend image and the frontend once, and both environmen
 Each deploy job runs `.github/workflows/deploy.yml`. It signs in to AWS as its environment's deploy role through GitHub's OIDC provider, then:
 
 1. `terraform plan -out` and `apply` with `backend_image=<repository URL>@sha256:<digest>` register a task definition revision for the image. Nothing restarts yet: the service ignores new revisions until step 3.
-2. `scripts/run-migrations.sh` runs `manage.py migrate` as a one-off task on the new revision, and fails unless it exits 0.
+2. `scripts/run-migrations.sh` runs `manage.py migrate` as a one-off task on the new revision, prints the task's output, and fails unless it exits 0. The job's log then lists each migration the release applied, such as `Applying accounts.0001_initial... OK`, or says `No migrations to apply.`
 3. `scripts/roll-out-backend.sh` switches the service to the new revision and waits until ECS reports the deployment `SUCCESSFUL`. If the new tasks keep failing, the circuit breaker rolls the service back to the previous revision, and the job fails.
 4. `scripts/publish-frontend.sh` uploads the build and invalidates CloudFront's cache.
 5. `scripts/smoke-test.sh` checks the API, the database, and the page through CloudFront.
@@ -200,6 +200,13 @@ You can run the same release from your machine, for example if GitHub Actions is
 6. `infra/scripts/smoke-test.sh staging`.
 
 Terraform needs the image for every plan. To plan without changing it, pass the one that's running: `-var "backend_image=$(infra/scripts/deployed-image.sh staging)"`.
+
+`run-migrations.sh` passes further arguments to `manage.py migrate`. `infra/scripts/run-migrations.sh staging --plan` lists what would run without changing anything, and `infra/scripts/run-migrations.sh staging <app label> <migration>` migrates one app forward or back to that migration. The task runs on the newest revision Terraform registered. After a release failed at its migrations, that revision holds the code that failed, so to run the code the service still runs, set `TASK_DEFINITION` to the service's revision:
+
+```bash
+TASK_DEFINITION=$(aws ecs describe-services --cluster shipscope-staging --services shipscope-staging-api \
+  --query 'services[0].taskDefinition' --output text) infra/scripts/run-migrations.sh staging --plan
+```
 
 ## Rolling back
 
@@ -332,6 +339,7 @@ docker run --rm -v "$PWD/infra:/data" -v shipscope-tflint:/root/.tflint.d \
 |---|---|---|
 | `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity` | The job's token doesn't match the role's trust policy. The subject must use the repository's immutable format with numeric IDs, a job in a GitHub environment sends `…:environment:<name>` instead of its branch, and the job needs the `id-token: write` permission. | Compare the trust policy with the prefix that `gh api repos/ValentinCasanova/shipscope/actions/oidc/customization/sub` prints |
 | `deploy-prod` sits at "Waiting for review" | Prod deploys need your approval | Approve it on the run page. When several runs wait, approve the newest and cancel the rest. |
+| `Run migrations` fails with `InconsistentMigrationHistory: Migration admin.0001_initial is applied before its dependency accounts.0001_initial` | The database applied Django's built-in migrations before the custom user model existed, and missed the one-time reset, or was restored from a backup older than it. Migrations run before the rollout, so the service keeps running the previous release. | Check that the database holds no users, groups, or admin log entries you need. Then unapply `auth`, which also drops the `admin` tables, with code from before the custom user model, and re-run the failed deploy job. After a failed release, the service's own revision has that code: `TASK_DEFINITION=$(aws ecs describe-services --cluster shipscope-<environment> --services shipscope-<environment>-api --query 'services[0].taskDefinition' --output text) infra/scripts/run-migrations.sh <environment> auth zero` |
 | A rolled-back deployment counts as a success | Something waits with `aws ecs wait services-stable`, which succeeds once the rolled-back service is stable again | Wait with `roll-out-backend.sh`, which checks the deployment's own status |
 | `tflint --init` fails with a GitHub API rate limit error | tflint downloads plugins through GitHub's API, which limits anonymous requests from shared runner addresses | Pass `GITHUB_TOKEN` to the step, as `pipeline.yml` does |
 | Pushing an image fails with `ImageTagAlreadyExistsException` | Tags are immutable, so ECR rejects any push to an existing tag, even with identical content | Use the digest of the image that's already there ([Deploying by hand](#deploying-by-hand), step 1) |

@@ -252,7 +252,7 @@ Staging costs about as much as prod, but you only need it while you're changing 
 terraform -chdir=infra/environments/staging destroy -var "backend_image=$(infra/scripts/deployed-image.sh staging)"
 ```
 
-`destroy` lists what it will delete and asks for confirmation. It deletes the whole environment, including the database, its data, and the logs; staging keeps no final snapshot. It takes a while, mostly because CloudFront has to disable the distribution before deleting it. The task definition revisions (which cost nothing), the images in ECR, and the state file remain.
+`destroy` lists what it will delete and asks for confirmation. It deletes the whole environment, including the database with its data and [admin users](#admin-users), and the logs; staging keeps no final snapshot. It takes a while, mostly because CloudFront has to disable the distribution before deleting it. The task definition revisions (which cost nothing), the images in ECR, and the state file remain.
 
 The last step, deleting the VPC, can fail with `DependencyViolation`. CloudFront creates a security group in the VPC for the VPC origin, `CloudFront-VPCOrigins-Service-SG`, and removes it on its own some time after the VPC origin is deleted, possibly hours later. By then everything that costs money is gone, and an empty VPC is free, so you can leave it: run the same `destroy` again later, or let the next release recreate staging in that VPC. Don't delete the security group yourself; AWS manages it.
 
@@ -277,7 +277,23 @@ task=$(aws ecs list-tasks --cluster shipscope-staging --service-name shipscope-s
 aws ecs execute-command --cluster shipscope-staging --task "$task" --container api --interactive --command /bin/sh
 ```
 
-Management commands work the same way, for example `--command "python manage.py createsuperuser"`. Don't put a password in the task definition instead: anyone who can read the task definition can read its environment.
+Management commands work the same way, such as `--command "python manage.py showmigrations"`.
+
+## Admin users
+
+The Django admin at `https://<domain>/admin/` shows each environment's data; `terraform -chdir=infra/environments/<environment> output -raw cloudfront_domain` prints the domain. Each environment's database has its own users, so create an admin user in each one you'll use, through ECS Exec, from a terminal:
+
+```bash
+task=$(aws ecs list-tasks --cluster shipscope-staging --service-name shipscope-staging-api --query 'taskArns[0]' --output text)
+aws ecs execute-command --cluster shipscope-staging --task "$task" --container api \
+  --interactive --command "python manage.py createsuperuser"
+```
+
+Type the password at the prompt, which doesn't show it. Never put it on the command line, as in `DJANGO_SUPERUSER_PASSWORD=… createsuperuser --noinput`: CloudTrail records the full command of every ECS Exec session, and the session's output goes to the environment's log group. A password in the task definition isn't safe either, because anyone who can read the task definition can read its environment.
+
+- `createsuperuser` needs a terminal. Run from a script, it prints `Superuser creation skipped due to not running in a TTY`.
+- Anyone who finds `/admin/` can reach the sign-in page, so use a long random password from a password manager, especially in prod.
+- Parking staging deletes its database and the admin users with it. Create yours again after the next release recreates staging.
 
 ## Costs
 

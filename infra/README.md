@@ -174,7 +174,14 @@ Each deploy job runs `.github/workflows/deploy.yml`. It signs in to AWS as its e
 
 A deploy takes about 4 minutes. The job summary lists the URL, the image digest, and the task definition revision, and the repository's environments list each deployment. `deploy-prod` starts only once you approve it on the run page. Each environment runs one deploy at a time and never cancels one halfway. While one runs, a newer run's deploy waits and replaces any older one that's still waiting.
 
-Migrations run before the new code takes traffic, but the old tasks keep serving during the rollout, so a migration must work with the previous release too: add a column as nullable, and drop it a release later.
+### Changing the schema
+
+Migrations run before the new code takes traffic, but the old tasks keep serving until the rollout finishes, and a rollback runs the old code against the newer schema. So every migration must work with the release before it. Change the schema in two steps, expand and then contract:
+
+1. **Expand:** add what the new code needs in a way the old code doesn't notice. Add a column as nullable, or give a new NOT NULL column a default in the database with `db_default=`. A plain `default=` isn't enough: Django applies it in Python and drops the column's default right after adding the column, so the old tasks' inserts fail with `null value in column … violates not-null constraint`.
+2. **Contract:** drop a column or table in a later release, once no deployed release uses it. Renaming a column takes both steps: add the new column and copy the data into it, then drop the old one in a later release.
+
+`backend/config/tests/test_migrations.py` runs [django-migration-linter](https://github.com/3YOURMIND/django-migration-linter) over every migration, as part of `test-backend`. It fails on operations that break the previous release, such as a NOT NULL column without a database default, a dropped or renamed column, or a changed column type. A deliberate contract step fails it too, because the linter can't tell it from a mistake: add that migration's name to `IGNORED_MIGRATIONS` in the test, with a comment saying why. Don't use the linter's `IgnoreMigration()` operation in the migration instead. The production image installs no development packages, so `migrate` would fail with `ModuleNotFoundError` when staging deploys.
 
 ## Deploying by hand
 
@@ -226,7 +233,7 @@ To go forward again, re-run the newest run's `deploy-prod / deploy` job the same
 
 - GitHub can re-run a run for up to 30 days after it started. For an older release, deploy its commit by hand. ECR keeps only the 30 newest images, and GitHub keeps the frontend build for 90 days.
 - The re-run applies the old commit's Terraform configuration, so it also reverts any infrastructure change made since. Check `git diff <old commit> <new commit> -- infra/` first.
-- A rollback doesn't undo migrations: the old code runs against the newer schema, which is why migrations must work with the previous release.
+- A rollback doesn't undo migrations: the old code runs against the newer schema, which is why migrations must work with the previous release ([Changing the schema](#changing-the-schema)).
 
 In an emergency, you can switch the backend alone back to an older task definition revision in about 2 minutes. Terraform keeps every revision registered:
 
@@ -340,6 +347,7 @@ docker run --rm -v "$PWD/infra:/data" -v shipscope-tflint:/root/.tflint.d \
 | `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity` | The job's token doesn't match the role's trust policy. The subject must use the repository's immutable format with numeric IDs, a job in a GitHub environment sends `…:environment:<name>` instead of its branch, and the job needs the `id-token: write` permission. | Compare the trust policy with the prefix that `gh api repos/ValentinCasanova/shipscope/actions/oidc/customization/sub` prints |
 | `deploy-prod` sits at "Waiting for review" | Prod deploys need your approval | Approve it on the run page. When several runs wait, approve the newest and cancel the rest. |
 | `Run migrations` fails with `InconsistentMigrationHistory: Migration admin.0001_initial is applied before its dependency accounts.0001_initial` | The database applied Django's built-in migrations before the custom user model existed, and missed the one-time reset, or was restored from a backup older than it. Migrations run before the rollout, so the service keeps running the previous release. | Check that the database holds no users, groups, or admin log entries you need. Then unapply `auth`, which also drops the `admin` tables, with code from before the custom user model, and re-run the failed deploy job. After a failed release, the service's own revision has that code: `TASK_DEFINITION=$(aws ecs describe-services --cluster shipscope-<environment> --services shipscope-<environment>-api --query 'services[0].taskDefinition' --output text) infra/scripts/run-migrations.sh <environment> auth zero` |
+| `Run migrations` fails with `ModuleNotFoundError: No module named 'django_migration_linter'` | A migration uses the linter's `IgnoreMigration()`, and the production image installs no development packages. CI passed, because the tests run with them. | Remove the operation, and add the migration's name to `IGNORED_MIGRATIONS` in `backend/config/tests/test_migrations.py` instead ([Changing the schema](#changing-the-schema)) |
 | A rolled-back deployment counts as a success | Something waits with `aws ecs wait services-stable`, which succeeds once the rolled-back service is stable again | Wait with `roll-out-backend.sh`, which checks the deployment's own status |
 | `tflint --init` fails with a GitHub API rate limit error | tflint downloads plugins through GitHub's API, which limits anonymous requests from shared runner addresses | Pass `GITHUB_TOKEN` to the step, as `pipeline.yml` does |
 | Pushing an image fails with `ImageTagAlreadyExistsException` | Tags are immutable, so ECR rejects any push to an existing tag, even with identical content | Use the digest of the image that's already there ([Deploying by hand](#deploying-by-hand), step 1) |

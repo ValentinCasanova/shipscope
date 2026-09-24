@@ -6,15 +6,13 @@ from django.db.models import Sum
 
 from orders.models import AnomalyFlag, Order, Rate, Shipment
 
-from .factories import AnomalyFlagFactory, OrderFactory, RateFactory, ShipmentFactory
-
-
-def select(rate: Rate) -> Shipment:
-    """Make the rate its shipment's selected rate, and return the shipment."""
-    shipment = rate.shipment
-    shipment.selected_rate = rate
-    shipment.save()
-    return shipment
+from .factories import (
+    AnomalyFlagFactory,
+    OrderFactory,
+    RateFactory,
+    ShipmentFactory,
+    select_rate,
+)
 
 
 @pytest.mark.django_db
@@ -41,7 +39,7 @@ def test_costs_add_up_exactly():
 @pytest.mark.django_db
 def test_deleting_the_selected_rate_clears_the_selection():
     rate = RateFactory()
-    shipment = select(rate)
+    shipment = select_rate(rate)
 
     rate.delete()
 
@@ -51,7 +49,7 @@ def test_deleting_the_selected_rate_clears_the_selection():
 
 @pytest.mark.django_db
 def test_deleting_an_order_deletes_its_shipment_rates_and_flags():
-    shipment = select(RateFactory())
+    shipment = select_rate(RateFactory())
     RateFactory(shipment=shipment)
     AnomalyFlagFactory(order=shipment.order)
 

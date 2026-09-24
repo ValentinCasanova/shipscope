@@ -51,3 +51,11 @@ class AnomalyFlagFactory(factory.django.DjangoModelFactory):
     order = factory.SubFactory(OrderFactory)
     severity = AnomalySeverity.WARNING
     reason = "The rate costs far more than usual for a 12 oz parcel."
+
+
+def select_rate(rate: Rate) -> Shipment:
+    """Make the rate its shipment's selected rate, and return the shipment."""
+    shipment = rate.shipment
+    shipment.selected_rate = rate
+    shipment.save()
+    return shipment

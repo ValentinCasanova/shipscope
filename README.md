@@ -6,7 +6,7 @@ A rate-shopping and order-sync dashboard: sign in with Google, connect a Google 
 
 **Stack:** React + TypeScript (Vite) · Django REST Framework · PostgreSQL · Docker · AWS (ECS Fargate, RDS, S3 + CloudFront) via Terraform · GitHub Actions
 
-> **Status: deployed.** The first slice, a Django API with a health endpoint and a React page that shows whether the API and the database are up, runs locally and in AWS. Every merge to `main` is linted, tested, and built, then deployed to staging, and to prod after approval. The product features come next.
+> **Status: deployed.** The first slice, a Django API with a health endpoint and a React page that shows whether the API and the database are up, runs locally and in AWS. So does the [data model](#data-model), which you can browse in the Django admin. Every merge to `main` is linted, tested, and built, then deployed to staging, and to prod after approval. The product features come next.
 >
 > **Live:** https://d3jrvwjgno9gs0.cloudfront.net
 
@@ -103,8 +103,10 @@ Run these in `backend/`. Commands that use the database need it running: `docker
 |---|---|
 | Run the tests | `uv run pytest` |
 | Lint and format | `uv run ruff check --fix .` and `uv run ruff format .` |
-| Create migrations | `uv run python manage.py makemigrations` |
+| Create migrations | `uv run python manage.py makemigrations`. Each migration must work with the previous release: see [Changing the schema](infra/README.md#changing-the-schema). |
+| Print a migration's SQL | `uv run python manage.py sqlmigrate <app> <migration>`, such as `sqlmigrate orders 0001` |
 | Apply migrations | `uv run python manage.py migrate`, or `docker compose restart backend` |
+| Create an admin user | `uv run python manage.py createsuperuser`, then sign in at http://localhost:8000/admin/ |
 | Add a dependency | `uv add <package>`, then rebuild the container with `docker compose up --build backend` |
 
 ### Frontend
@@ -133,6 +135,77 @@ The gitleaks hook scans only the changes being committed. To scan every commit i
 | `GET /api/health/` | None | `{"status": "ok", "database": "ok"}`, or `"database": "unavailable"` when the database doesn't answer a `SELECT 1` |
 
 The health endpoint returns 200 whenever the Django process is running, even while the database is down, so a load balancer doesn't replace working containers during a database outage. Django REST framework is configured to require authentication by default, so every endpoint added later is closed unless its view opts out.
+
+## Data model
+
+Two apps hold the data. `accounts` has the users and the Google accounts they sign in with. `orders` has the orders synced from a user's Google Sheet, each order's EasyPost shipment with the rates quoted for it, and the anomaly check's flags. The diagram leaves out each table's `id` and timestamps.
+
+```mermaid
+erDiagram
+    User ||--o| GoogleCredential : "signs in with"
+    User ||--o{ Order : owns
+    Order ||--o| Shipment : "ships as"
+    Order ||--o{ AnomalyFlag : "is flagged by"
+    Shipment ||--o{ Rate : has
+    Shipment |o--o| Rate : selects
+
+    User {
+        varchar username UK
+        varchar email
+    }
+    GoogleCredential {
+        bigint user_id FK, UK
+        varchar google_sub UK "Google account ID, never empty"
+        varchar sheet_id "blank until a Sheet is connected"
+    }
+    Order {
+        bigint user_id FK
+        varchar external_id "the Sheet's ID, unique per user"
+        varchar recipient_name
+        varchar recipient_street1
+        varchar recipient_street2 "may be blank"
+        varchar recipient_city
+        varchar recipient_state "may be blank"
+        varchar recipient_postal_code "may be blank"
+        varchar recipient_country "such as US"
+        numeric weight_oz "null when missing"
+        numeric length_in "null when missing"
+        numeric width_in "null when missing"
+        numeric height_in "null when missing"
+        varchar status "pending, rated, or selected"
+    }
+    Shipment {
+        bigint order_id FK, UK
+        varchar easypost_id "blank until rates are fetched"
+        bigint selected_rate_id FK "null until a rate is selected"
+    }
+    Rate {
+        bigint shipment_id FK
+        varchar carrier "such as USPS"
+        varchar service "such as Priority"
+        numeric cost "0 or more, 2 decimal places"
+        varchar currency "such as USD"
+        smallint delivery_days "null when unknown"
+        timestamptz fetched_at
+    }
+    AnomalyFlag {
+        bigint order_id FK
+        varchar severity "info or warning"
+        varchar reason "up to 500 characters"
+    }
+```
+
+Weight is in ounces and dimensions in inches, EasyPost's units, and each field's name says which. Money is `numeric(10,2)`, which Django reads as an exact `Decimal`, never as a float.
+
+The database enforces the rules that must always hold, so no import or bug can break them:
+
+- one order per external ID per user, so syncing a Sheet again updates its orders instead of copying them
+- one shipment per order, one Google credential per user, and one user per Google account
+- only known statuses and severities, weight and dimensions greater than 0 when present, costs of 0 or more, and country and currency codes of two and three capital letters, such as `US` and `USD`
+
+A shipment's selected rate must be one of its own rates. That's a rule across two rows, which a check constraint can't express, so model validation checks it, and the admin with it. Deleting a user deletes their orders, deleting an order deletes its shipment, rates, and flags, and deleting the selected rate clears the selection.
+
+The Django admin at `/admin/` lists every model, with filters and search. When a form breaks a rule, it shows the rule's message instead of an error page.
 
 ## Production image
 
@@ -185,7 +258,7 @@ lint ─┬─ test-backend  ─┬─ build-backend  ─┬─ deploy-staging �
 
 | Path | Contents |
 |---|---|
-| `backend/` | Django REST API, managed with uv. `config/` holds the settings and URL routes, and `core/` the health endpoint. |
+| `backend/` | Django REST API, managed with uv. `config/` holds the settings and URL routes, `core/` the health endpoint, `accounts/` the users and their Google accounts, and `orders/` the orders, shipments, rates, and anomaly flags. |
 | `frontend/` | React + TypeScript app built with Vite. `src/api/` holds the typed API client, and `src/components/` the UI. |
 | `infra/` | Terraform and deploy scripts for the AWS environments. See [`infra/README.md`](infra/README.md). |
 | `.github/` | The GitHub Actions pipeline and Dependabot's configuration |
@@ -213,6 +286,7 @@ lint ─┬─ test-backend  ─┬─ build-backend  ─┬─ deploy-staging �
 | Code with type errors passes `tsc --noEmit` | The root `tsconfig.json` only references the other two configs, so `tsc --noEmit` checks no files | Use `npm run typecheck`, which runs `tsc -b` |
 | npm reports a peer-dependency conflict with typescript-eslint | TypeScript 7 got installed, but typescript-eslint supports only versions below 6.1 | Keep `typescript` at `~6.0` in `package.json` |
 | A git hook fails with `command not found` | The one-time setup hasn't run, or the git client can't find `uv`, `node`, `npm`, or `terraform` (for example, a GUI app that doesn't load nvm) | Run the setup in [Working on your machine](#working-on-your-machine), and commit from a terminal |
+| `migrate`, or the backend container at startup, fails with `InconsistentMigrationHistory: Migration admin.0001_initial is applied before its dependency accounts.0001_initial` | Your database applied Django's built-in migrations before the custom user model existed | `docker compose down -v`, which deletes the local database, then `docker compose up`. For staging or prod, see [`infra/README.md`](infra/README.md#pipeline). |
 | `makemigrations --check` reports `No changes detected` although a model changed | The app has no `migrations` package, and without an app label `makemigrations` skips such apps | Keep a `migrations/__init__.py` in every app, as `startapp` creates |
 | Pushing a change to `.github/workflows/` fails with `refusing to allow an OAuth App to create or update workflow … without workflow scope` | git pushed over HTTPS with the GitHub CLI's token, which lacks the `workflow` scope | Push over SSH, or run `gh auth refresh -s workflow` |
 | A frontend test of an error state is slow or times out | TanStack Query retries a failed query 3 times by default | Render with `renderWithQueryClient` from `src/test/render.tsx`, which turns retries off |

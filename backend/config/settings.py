@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "core",
+    "accounts",
 ]
 
 MIDDLEWARE = [
@@ -121,6 +122,13 @@ DATABASES = {
         },
     },
 }
+
+
+# Users
+
+# A custom user model from the first migration on, so fields can be added to it later
+# (accounts/models.py).
+AUTH_USER_MODEL = "accounts.User"
 
 
 # Password validation

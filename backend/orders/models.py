@@ -1,10 +1,30 @@
 """Orders from the connected Sheet, their EasyPost shipments and rates, and anomaly flags."""
 
+from typing import Self
+
 from django.conf import settings
+from django.contrib.auth.base_user import AbstractBaseUser
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 from django.utils.text import Truncator
+
+
+class OwnedQuerySet(models.QuerySet):
+    """Rows that each belong to one user, directly or through other rows.
+
+    Each model names the lookup from its rows to their user in OWNER_PATH, such as
+    "order__user" for a shipment. IsOwner (permissions.py) follows the same path on a
+    single object.
+    """
+
+    def for_user(self, user: AbstractBaseUser | AnonymousUser) -> Self:
+        """Only the rows that belong to user. A signed-out visitor owns none."""
+        if not user.is_authenticated:
+            return self.none()
+        return self.filter(**{self.model.OWNER_PATH: user})
+
 
 # Django doesn't enforce choices in the database, so a check constraint backs each set.
 # The constraints need these classes, and a model's Meta can't see names defined in the
@@ -60,6 +80,10 @@ class Order(models.Model):
     status = models.CharField(max_length=20, choices=OrderStatus, default=OrderStatus.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = OwnedQuerySet.as_manager()
+
+    OWNER_PATH = "user"
 
     class Meta:
         constraints = [
@@ -132,6 +156,10 @@ class Shipment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = OwnedQuerySet.as_manager()
+
+    OWNER_PATH = "order__user"
+
     def __str__(self) -> str:
         return f"Shipment for order {self.order.external_id}"
 
@@ -166,6 +194,10 @@ class Rate(models.Model):
     # A default rather than auto_now_add, so tests can create stale rates.
     fetched_at = models.DateTimeField(default=timezone.now)
 
+    objects = OwnedQuerySet.as_manager()
+
+    OWNER_PATH = "shipment__order__user"
+
     class Meta:
         constraints = [
             models.CheckConstraint(
@@ -194,6 +226,10 @@ class AnomalyFlag(models.Model):
     # The check's short explanation. Its tool schema should ask for the same limit.
     reason = models.CharField(max_length=500)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = OwnedQuerySet.as_manager()
+
+    OWNER_PATH = "order__user"
 
     class Meta:
         constraints = [

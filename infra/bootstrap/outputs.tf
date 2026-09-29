@@ -22,3 +22,8 @@ output "workload_boundary_arn" {
   description = "Permissions boundary that every workload role must carry."
   value       = aws_iam_policy.workload_boundary.arn
 }
+
+output "name_servers" {
+  description = "Name servers of the domain's hosted zone. The domain's registration must list exactly these."
+  value       = aws_route53_zone.main.name_servers
+}

@@ -4,12 +4,13 @@ import secrets
 from .ecs_metadata import TASK_IP
 from .processes import run_in_new_process
 
-CLOUDFRONT_HOST = "d111111abcdef8.cloudfront.net"
+# Each environment serves its own domain, and Django accepts only that host.
+DOMAIN = "staging.shipscope.net"
 
 # What the ECS task definition sets, apart from the database connection details.
 DEPLOYED_ENVIRONMENT = {
     "DJANGO_DEBUG": "false",
-    "DJANGO_ALLOWED_HOSTS": CLOUDFRONT_HOST,
+    "DJANGO_ALLOWED_HOSTS": DOMAIN,
     "DJANGO_BEHIND_CLOUDFRONT": "true",
     # The deployment checks reject keys shorter than 50 characters.
     "DJANGO_SECRET_KEY": secrets.token_urlsafe(50),
@@ -44,9 +45,9 @@ def test_fails_at_startup_when_secret_key_is_empty():
 
 
 def test_allows_the_task_ip_on_ecs(metadata_endpoint):
-    loaded = load_settings("ALLOWED_HOSTS", DJANGO_ALLOWED_HOSTS=CLOUDFRONT_HOST)
+    loaded = load_settings("ALLOWED_HOSTS", DJANGO_ALLOWED_HOSTS=DOMAIN)
 
-    assert loaded["ALLOWED_HOSTS"] == [CLOUDFRONT_HOST, TASK_IP]
+    assert loaded["ALLOWED_HOSTS"] == [DOMAIN, TASK_IP]
 
 
 def test_trusts_cloudfronts_protocol_header_only_behind_cloudfront():

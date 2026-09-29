@@ -83,7 +83,7 @@ jobs:
 
       - name: Read the environment's URL
         id: url
-        run: echo "url=https://$(terraform -chdir="infra/environments/$ENVIRONMENT" output -raw cloudfront_domain)" >>"$GITHUB_OUTPUT"
+        run: echo "url=https://$(terraform -chdir="infra/environments/$ENVIRONMENT" output -raw domain)" >>"$GITHUB_OUTPUT"
 
       # Before the rollout, so new code never runs against an old schema.
       - name: Run migrations

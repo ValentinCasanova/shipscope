@@ -8,7 +8,7 @@ A rate-shopping and order-sync dashboard: sign in with Google, connect a Google 
 
 > **Status: deployed.** The first slice, a Django API with a health endpoint and a React page that shows whether the API and the database are up, runs locally and in AWS. So does the [data model](#data-model), which you can browse in the Django admin. Every merge to `main` is linted, tested, and built, then deployed to staging, and to prod after approval. The product features come next.
 >
-> **Live:** https://d3jrvwjgno9gs0.cloudfront.net
+> **Live:** https://shipscope.net
 
 ## Prerequisites
 
@@ -225,12 +225,12 @@ The frontend has no production container: `npm run build` produces static files,
 
 ## Deployment
 
-The app runs in two AWS environments, staging and prod, which Terraform builds from one module in [`infra/`](infra/). In each one, CloudFront serves the React build from S3 and forwards `/api/*`, `/admin/*`, and `/static/*` to Django on ECS Fargate behind an internal load balancer, and PostgreSQL runs on RDS. CloudFront is the only part reachable from the internet. The page and the API share its domain, just as they share the Vite dev server's address locally.
+The app runs in two AWS environments, staging and prod, which Terraform builds from one module in [`infra/`](infra/). In each one, CloudFront serves the React build from S3 and forwards `/api/*`, `/admin/*`, and `/static/*` to Django on ECS Fargate behind an internal load balancer, and PostgreSQL runs on RDS. CloudFront is the only part reachable from the internet. The page and the API share the environment's domain, just as they share the Vite dev server's address locally.
 
 | Environment | URL | Deployed |
 |---|---|---|
-| Prod | https://d3jrvwjgno9gs0.cloudfront.net | After approval, with the release staging just ran |
-| Staging | A new one each time staging is recreated | Automatically, on every merge to `main`. Between work sessions, staging is removed to save its running cost, and the next release recreates it. |
+| Prod | https://shipscope.net | After approval, with the release staging just ran |
+| Staging | https://staging.shipscope.net | Automatically, on every merge to `main`. Between work sessions, staging is removed to save its running cost, and the next release recreates it at the same URL. |
 
 The pipeline, [`.github/workflows/pipeline.yml`](.github/workflows/pipeline.yml), runs on every pull request and every push to `main`:
 
@@ -246,13 +246,13 @@ lint ─┬─ test-backend  ─┬─ build-backend  ─┬─ deploy-staging �
 | `test-frontend` | Runs Vitest |
 | `build-backend` | Builds the production image. On `main`, it pushes the image to ECR, tagged with the commit SHA, and both environments deploy it by digest. |
 | `build-frontend` | Runs `npm run build`. Both environments get this same build. |
-| `deploy-staging`, `deploy-prod` | Terraform registers the new image, migrations run as a one-off task, and the service switches over, rolling itself back if the new tasks fail. Then the frontend is published, and a smoke test checks the environment through CloudFront. |
+| `deploy-staging`, `deploy-prod` | Terraform registers the new image, migrations run as a one-off task, and the service switches over, rolling itself back if the new tasks fail. Then the frontend is published, and a smoke test checks the environment on its domain. |
 
 - GitHub Actions signs in to AWS through OIDC, so GitHub stores no AWS keys, and the pipeline can't change its own permissions.
 - `main` changes only through pull requests, which need `lint`, both test jobs, and both build jobs to pass, and which are squash-merged.
 - Every action is pinned to a full commit SHA, and Dependabot proposes updates weekly.
 
-[`infra/README.md`](infra/README.md) covers the architecture, how a release works, rolling back, deploying by hand, parking staging, and costs: about $45 a month per environment.
+[`infra/README.md`](infra/README.md) covers the architecture, the domains and secrets, how a release works, rolling back, deploying by hand, parking staging, and costs: about $46 a month per environment, and about $2 for what they share, including the domain.
 
 ## Repository layout
 

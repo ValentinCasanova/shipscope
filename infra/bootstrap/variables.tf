@@ -37,3 +37,9 @@ variable "github_repository_id" {
     error_message = "github_repository_id must be a numeric GitHub repository ID."
   }
 }
+
+variable "domain" {
+  description = "Domain registered with Route 53, whose hosted zone this stack holds. Prod serves its apex, and staging serves staging.<domain>."
+  type        = string
+  default     = "shipscope.net"
+}

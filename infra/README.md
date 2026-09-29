@@ -7,10 +7,11 @@ Terraform and deploy scripts for ShipScope's AWS infrastructure in us-east-2. A 
 Each environment has its own copy of this request path:
 
 ```text
-Browser ──HTTPS──► CloudFront  d….cloudfront.net
+Browser ──HTTPS──► CloudFront  shipscope.net (prod) or staging.shipscope.net (staging)
+                     │  any other host, such as d….cloudfront.net: 301 to the domain
                      │
                      ├── * (default) ──Origin Access Control──► S3 bucket (private)
-                     │     SPA function: /orders/42 → /index.html      index.html, assets/*, favicon.svg
+                     │     SPA routing: /orders/42 → /index.html       index.html, assets/*, favicon.svg
                      │
                      └── /api/*   /admin/*   /static/*
                               │  VPC origin, HTTP
@@ -25,7 +26,7 @@ Browser ──HTTPS──► CloudFront  d….cloudfront.net
   └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-CloudFront is the only part reachable from the internet. It serves the React build and the API on one HTTPS domain, so the browser never makes a cross-origin request:
+CloudFront is the only part reachable from the internet. It serves the React build and the API on the environment's own domain ([Domains](#domains)), so the browser never makes a cross-origin request:
 
 | Path | Origin | Caching |
 |---|---|---|
@@ -33,7 +34,9 @@ CloudFront is the only part reachable from the internet. It serves the React bui
 | `/static/*` | The load balancer | Cached. These are the Django admin's and DRF's files, which WhiteNoise serves with hashed names. |
 | Everything else | The S3 bucket, through Origin Access Control | Cached. A CloudFront Function serves `index.html` for paths without a file extension, such as `/orders/42`, so the React app's client-side routes survive a reload. |
 
-Every path redirects HTTP to HTTPS and adds AWS's managed security headers, including `Strict-Transport-Security`. The SPA fallback is a function on the S3 path rather than a custom error response, because custom error responses apply to every origin and would turn the API's 404s into the React page.
+Every path redirects HTTP to HTTPS, accepts TLS 1.2 or later (the `TLSv1.2_2021` security policy), and adds AWS's managed security headers, including `Strict-Transport-Security`. On every path, a viewer-request CloudFront Function also redirects any host but the environment's domain, such as the distribution's own `d….cloudfront.net` name, to the same path and query string on the domain, with a 301. Django then accepts only the domain as a host.
+
+The frontend's function also does the SPA fallback. That's a function on the S3 path rather than a custom error response, because custom error responses apply to every origin and would turn the API's 404s into the React page. The API paths run a second function, rendered from the same template without the fallback.
 
 Security groups chain the hops. Each one admits only the hop before it:
 
@@ -51,7 +54,8 @@ The load balancer is internal and the database isn't publicly accessible. Both s
 |---|---|---|
 | Network | VPC `shipscope-<environment>` | Two Availability Zones, each with a public and a private `/24` subnet, and an internet gateway. No NAT gateway. |
 | Database | RDS instance `shipscope-<environment>` | PostgreSQL 17, `db.t4g.micro`, 20 GB gp3, single-AZ, encrypted. Refuses connections without TLS. |
-| Secrets | `shipscope/<environment>/django-secret-key`, `…/db-password`, `…/integrations` | Terraform generates the first two and never stores them in its state or shows them in a plan. `integrations` is for third-party API keys, which you set by hand. ECS injects secrets when a task starts. |
+| Domain | `shipscope.net` or `staging.shipscope.net` | An ACM certificate in us-east-1, validated with a DNS record, and A and AAAA alias records that point the domain at the distribution. The hosted zone is in the bootstrap stack. |
+| Secrets | `shipscope/<environment>/django-secret-key`, `…/db-password`, `…/token-encryption-key` | Terraform generates them and never stores them in its state or shows them in a plan. The API also reads `…/integrations`, which the bootstrap stack holds ([Secrets](#secrets)). ECS injects secrets when a task starts. |
 | API | ECS service `shipscope-<environment>-api` | One Fargate task with 0.25 vCPU and 0.5 GB, running Gunicorn with 2 workers. When a deployment's tasks keep failing, ECS rolls it back. ECS Exec is on. |
 | Load balancer | `shipscope-<environment>-api` | Internal, HTTP on port 80. Health checks call `/api/health/` every 15 seconds. |
 | Frontend | S3 bucket `shipscope-<environment>-frontend-…` and a CloudFront distribution | The bucket is private, and only the distribution can read it. |
@@ -61,6 +65,8 @@ The environments differ only in the values their roots pass to the module:
 
 | Setting | Staging | Prod |
 |---|---|---|
+| Domain | `staging.shipscope.net` | `shipscope.net` |
+| Google OAuth client | The Google Cloud project's staging client | Its prod client |
 | VPC address range | `10.10.0.0/16` | `10.20.0.0/16` |
 | Deletion protection on the database and the load balancer | Off | On |
 | Database backups | Kept 1 day, no final snapshot | Kept 7 days, with a final snapshot before deletion |
@@ -71,7 +77,7 @@ The environments differ only in the values their roots pass to the module:
 
 | Path | Contents | Applied by |
 |---|---|---|
-| `bootstrap/` | The Terraform state bucket, GitHub's OIDC provider, the CI roles, the permissions boundary for workload roles, and the ECR repository | You, with your own credentials, so the pipeline can't change the roles it runs as |
+| `bootstrap/` | The Terraform state bucket, GitHub's OIDC provider, the CI roles, the permissions boundary for workload roles, the ECR repository, the domain's hosted zone, and each environment's `integrations` secret | You, with your own credentials, so the pipeline can't change the roles it runs as |
 | `modules/environment/` | Everything one environment needs | Nobody directly: the environment roots call it |
 | `environments/staging/`, `environments/prod/` | One root per environment, each with its own settings and state file | The pipeline, with that environment's deploy role, or you |
 | `scripts/` | The deploy scripts, which read what they need from Terraform outputs | Run by the pipeline, or by you |
@@ -103,6 +109,8 @@ Terraform and the AWS CLI both read `AWS_PROFILE`. A session lasts up to 12 hour
 | Deploy roles | `shipscope-staging-deploy`, `shipscope-prod-deploy` | Each trusts only jobs that run in the GitHub environment of the same name. `PowerUserAccess`, plus IAM rights over that environment's workload roles |
 | Permissions boundary | `shipscope-workload-boundary` | The most a workload role can ever do: pull backend images, write to the `/ecs/shipscope-*` log groups, read `shipscope/*` secrets, and open ECS Exec sessions |
 | ECR repository | `shipscope-backend` | Immutable tags and scanning on push. Keeps the 30 newest images and expires untagged ones after 7 days. |
+| Hosted zone | `shipscope.net` | Route 53 created it when the domain was registered, and this stack adopted it. Terraform refuses to destroy it. The environment stacks add their own records to it ([Domains](#domains)). |
+| Integrations secrets | `shipscope/staging/integrations`, `shipscope/prod/integrations` | Each environment's third-party API keys, which you set by hand ([Secrets](#secrets)). They're here rather than in the environment stacks so that parking staging keeps them. Deleted secrets are recoverable for 7 days. |
 
 The CI roles live under the IAM path `/shipscope-ci/`, and sessions last up to 2 hours. A trust policy matches the full OIDC subject, such as `repo:ValentinCasanova@129884225/shipscope@1368534118:environment:prod`. `gh api repos/ValentinCasanova/shipscope/actions/oidc/customization/sub` prints the part before `:environment`.
 
@@ -150,6 +158,62 @@ gh variable set AWS_DEPLOY_ROLE_ARN --env prod \
 
 Both GitHub environments accept deployments from `main` only. `prod` also requires your review, and administrators can't bypass it, so every prod deploy waits for your approval.
 
+## Domains
+
+The domain `shipscope.net` is registered with Route 53 in this account. Prod serves its apex, https://shipscope.net, and staging https://staging.shipscope.net. Google's sign-in sends users back only to redirect URLs registered in advance, so each environment needs a URL that stays the same, even when parking staging recreates its distribution.
+
+| Part | Stack | Details |
+|---|---|---|
+| Registration | Not in Terraform | Registered and renewed in the Route 53 console, a year at a time. AWS credits don't cover it. Privacy protection is on. |
+| Hosted zone `shipscope.net` | `bootstrap/` | The registration lists its four name servers, which `terraform -chdir=infra/bootstrap output name_servers` prints. |
+| Certificate | Each environment | From ACM in us-east-1, the only Region whose certificates CloudFront uses. ACM validates it with a DNS record in the zone, and renews it on its own while that record exists. |
+| `A` and `AAAA` records | Each environment | Aliases for the distribution. Route 53 doesn't charge for queries to them. |
+
+Each distribution keeps its own `d….cloudfront.net` name too. A request for that name, or any host but the domain, gets a 301 to the same path on the domain ([Architecture](#architecture)). So Django's `ALLOWED_HOSTS` lists only the domain, plus the task's IP for health checks.
+
+## Secrets
+
+| Secret | Stack | Created by | The API gets it as |
+|---|---|---|---|
+| `shipscope/<environment>/django-secret-key` | Environment | Terraform generates it | `DJANGO_SECRET_KEY` |
+| `shipscope/<environment>/db-password` | Environment | Terraform generates it, and RDS takes the database's password from it | `POSTGRES_PASSWORD` |
+| `shipscope/<environment>/token-encryption-key` | Environment | Terraform generates it | `TOKEN_ENCRYPTION_KEY`, from which the API derives the key that encrypts users' stored Google tokens |
+| `shipscope/<environment>/integrations` | `bootstrap/` | Terraform creates it empty, and you set its keys | One variable per key, such as `GOOGLE_OAUTH_CLIENT_SECRET` |
+
+Terraform never stores a generated value in its state or shows it in a plan. `modules/environment/secrets.tf` explains how to rotate one. ECS injects the secrets when a task starts, so running tasks keep the old values until the next release or rollout replaces them.
+
+`integrations` holds third-party API keys as one JSON object. It's in the bootstrap stack so that parking staging keeps it. To set or change a key, run this from a terminal, with a session from `aws login`:
+
+```bash
+infra/scripts/set-integration-key.sh staging GOOGLE_OAUTH_CLIENT_SECRET
+```
+
+It asks for the value without showing it, and keeps the secret's other keys. To see which keys a secret holds, without their values:
+
+```bash
+aws secretsmanager get-secret-value --secret-id shipscope/staging/integrations \
+  --query SecretString --output text | jq -r 'keys[]'
+```
+
+Set every key before the first release whose task definition names it. A task can't start without one of its keys, so that release would stop at `Run migrations` with `ResourceInitializationError`.
+
+### Rotating the Google client secret
+
+Google shows a client's secret only once, when it's created, and a client can have two secrets at a time. To replace one:
+
+1. In the Google Cloud console, open Google Auth Platform → Clients → the environment's client, and add a secret.
+2. Store it with `set-integration-key.sh`, as above.
+3. Replace the running tasks, so they read the new value. Check that the deployment reaches `COMPLETED`, in the ECS console or with the `describe-services` command:
+
+   ```bash
+   aws ecs update-service --cluster shipscope-prod --service shipscope-prod-api --force-new-deployment \
+     --query 'service.serviceName' --output text
+   aws ecs describe-services --cluster shipscope-prod --services shipscope-prod-api \
+     --query 'services[0].deployments[0].rolloutState' --output text
+   ```
+
+4. Disable the old secret in Google's console, then delete it.
+
 ## Releases
 
 Every push to `main`, in practice every merged pull request, runs the pipeline in `.github/workflows/pipeline.yml`:
@@ -167,10 +231,10 @@ The pipeline builds the backend image and the frontend once, and both environmen
 Each deploy job runs `.github/workflows/deploy.yml`. It signs in to AWS as its environment's deploy role through GitHub's OIDC provider, then:
 
 1. `terraform plan -out` and `apply` with `backend_image=<repository URL>@sha256:<digest>` register a task definition revision for the image. Nothing restarts yet: the service ignores new revisions until step 3.
-2. `scripts/run-migrations.sh` runs `manage.py migrate` as a one-off task on the new revision, prints the task's output, and fails unless it exits 0. The job's log then lists each migration the release applied, such as `Applying accounts.0001_initial... OK`, or says `No migrations to apply.`
+2. `scripts/run-migrations.sh` runs `manage.py migrate` as a one-off task on the new revision, prints the task's output, and fails unless it exits 0. The job's log then lists each migration the release applied, such as `Applying accounts.0001_initial... OK`, or says `No migrations to apply.` When a migration fails, the log shows only the exception's type, such as `django.db.utils.IntegrityError`, and the command that reads the whole output from CloudWatch Logs. Anyone can read this public repository's logs, and a failed migration's message can quote database rows.
 3. `scripts/roll-out-backend.sh` switches the service to the new revision and waits until ECS reports the deployment `SUCCESSFUL`. If the new tasks keep failing, the circuit breaker rolls the service back to the previous revision, and the job fails.
 4. `scripts/publish-frontend.sh` uploads the build and invalidates CloudFront's cache.
-5. `scripts/smoke-test.sh` checks the API, the database, and the page through CloudFront.
+5. `scripts/smoke-test.sh` checks the API, the database, and the page on the environment's domain, and that the distribution's `d….cloudfront.net` name redirects there.
 
 A deploy takes about 4 minutes. The job summary lists the URL, the image digest, and the task definition revision, and the repository's environments list each deployment. `deploy-prod` starts only once you approve it on the run page. Each environment runs one deploy at a time and never cancels one halfway. While one runs, a newer run's deploy waits and replaces any older one that's still waiting.
 
@@ -234,6 +298,7 @@ To go forward again, re-run the newest run's `deploy-prod / deploy` job the same
 - GitHub can re-run a run for up to 30 days after it started. For an older release, deploy its commit by hand. ECR keeps only the 30 newest images, and GitHub keeps the frontend build for 90 days.
 - The re-run applies the old commit's Terraform configuration, so it also reverts any infrastructure change made since. Check `git diff <old commit> <new commit> -- infra/` first.
 - A rollback doesn't undo migrations: the old code runs against the newer schema, which is why migrations must work with the previous release ([Changing the schema](#changing-the-schema)).
+- Releases from before the custom domain can't be redeployed. Their configuration creates the `integrations` secret, which the bootstrap stack now holds, so the apply fails with `already exists`. To run older application code, deploy its image by hand with the current configuration ([Deploying by hand](#deploying-by-hand), steps 2 to 4, with the old image's digest).
 
 In an emergency, you can switch the backend alone back to an older task definition revision in about 2 minutes. Terraform keeps every revision registered:
 
@@ -252,13 +317,13 @@ Staging costs about as much as prod, but you only need it while you're changing 
 terraform -chdir=infra/environments/staging destroy -var "backend_image=$(infra/scripts/deployed-image.sh staging)"
 ```
 
-`destroy` lists what it will delete and asks for confirmation. It deletes the whole environment, including the database with its data and [admin users](#admin-users), and the logs; staging keeps no final snapshot. It takes a while, mostly because CloudFront has to disable the distribution before deleting it. The task definition revisions (which cost nothing), the images in ECR, and the state file remain.
+`destroy` lists what it will delete and asks for confirmation. It deletes the whole environment, including the database with its data and [admin users](#admin-users), the logs, the certificate, and the DNS records; staging keeps no final snapshot. It takes a while, mostly because CloudFront has to disable the distribution before deleting it. The task definition revisions (which cost nothing), the images in ECR, the state file, and staging's `integrations` secret, which the bootstrap stack holds, remain.
 
 The last step, deleting the VPC, can fail with `DependencyViolation`. CloudFront creates a security group in the VPC for the VPC origin, `CloudFront-VPCOrigins-Service-SG`, and removes it on its own some time after the VPC origin is deleted, possibly hours later. By then everything that costs money is gone, and an empty VPC is free, so you can leave it: run the same `destroy` again later, or let the next release recreate staging in that VPC. Don't delete the security group yourself; AWS manages it.
 
-To bring staging back, merge a pull request, or run the pipeline on `main` without one: `gh workflow run pipeline.yml --ref main`, or **Run workflow** on the pipeline's Actions page. The staging deploy then creates the whole environment, which takes about 25 minutes instead of 4. Staging's secrets are deleted at once rather than after a recovery window, so their names are free again. `deploy-prod` still waits for your approval. For a run of the commit prod already runs, approving changes nothing, while rejecting it marks the run as failed.
+To bring staging back, merge a pull request, or run the pipeline on `main` without one: `gh workflow run pipeline.yml --ref main`, or **Run workflow** on the pipeline's Actions page. The staging deploy then creates the whole environment, which takes about 25 minutes instead of 4. Staging's generated secrets are deleted at once rather than after a recovery window, so their names are free again, and the recreated ones get new values. `deploy-prod` still waits for your approval. For a run of the commit prod already runs, approving changes nothing, while rejecting it marks the run as failed.
 
-Every new distribution gets a new domain, so staging's URL changes each time. The newest deploy's job summary shows the current one, and so do the repository's `staging` environment on GitHub and `terraform -chdir=infra/environments/staging output -raw cloudfront_domain`. Anything that stores the URL, such as a Google OAuth redirect URI, has to be updated each time, unless the environments get a custom domain.
+Staging comes back at the same URL, https://staging.shipscope.net: the new distribution gets a new `d….cloudfront.net` name, and the release points the domain at it with a new certificate. Its `integrations` secret stays too, keys included, so the recreated tasks can start.
 
 Prod can't be parked this way: deletion protection stops `destroy` at the database and the load balancer, on purpose.
 
@@ -281,7 +346,7 @@ Management commands work the same way, such as `--command "python manage.py show
 
 ## Admin users
 
-The Django admin at `https://<domain>/admin/` shows each environment's data; `terraform -chdir=infra/environments/<environment> output -raw cloudfront_domain` prints the domain. Each environment's database has its own users, so create an admin user in each one you'll use, through ECS Exec, from a terminal:
+The Django admin at https://shipscope.net/admin/ and https://staging.shipscope.net/admin/ shows each environment's data. Each environment's database has its own users, so create an admin user in each one you'll use, through ECS Exec, from a terminal:
 
 ```bash
 task=$(aws ecs list-tasks --cluster shipscope-staging --service-name shipscope-staging-api --query 'taskArns[0]' --output text)
@@ -306,12 +371,13 @@ Monthly prices in us-east-2, checked in September 2026:
 | RDS storage, 20 GB gp3 | $2.30 |
 | Fargate task, 0.25 vCPU and 0.5 GB | $9.01 |
 | The task's public IPv4 address: $0.005 an hour | $3.65 |
-| Secrets Manager, 3 secrets | $1.20 |
+| Secrets Manager, 4 secrets, including the environment's `integrations` secret in the bootstrap stack | $1.60 |
 | CloudWatch Logs, S3, and data transfer | ~$1 |
 | CloudFront, within its always-free monthly allowance of 1 TB, 10 million requests, and 2 million function invocations | $0 |
-| **One environment** | **≈ $45** |
+| The ACM certificate, and DNS queries to the alias records | $0 |
+| **One environment** | **≈ $46** |
 
-Both environments running all month cost about $90. With staging parked outside work sessions, the total is about $45 for prod plus about 6 cents per hour staging is up. The shared resources, ECR images and the state bucket, add well under $1 a month, and GitHub Actions is free for public repositories.
+Both environments running all month cost about $92. With staging parked outside work sessions, the total is about $46 for prod plus about 6 cents per hour staging is up, and staging's `integrations` secret, $0.40 a month, stays while it's parked. The shared resources add about $2 a month: the hosted zone, $0.50; the domain's registration, $17 a year, which AWS credits don't cover; and ECR images and the state bucket, well under $1. GitHub Actions is free for public repositories.
 
 What the design avoids paying for, per environment: a NAT gateway (about $33 a month, plus $0.045 per GB), the two public IPv4 addresses an internet-facing load balancer would need ($7.30 a month), and Multi-AZ RDS (another $11.68 a month, plus the storage again).
 
@@ -355,6 +421,8 @@ docker run --rm -v "$PWD/infra:/data" -v shipscope-tflint:/root/.tflint.d \
 | `Your account must be verified before you can add new CloudFront resources` | AWS blocks some new accounts from CloudFront until they're verified | Open an "Account and billing" case with AWS Support. It can take days. |
 | Parking staging ends with `DependencyViolation` while deleting the VPC | CloudFront's own security group for the VPC origin, `CloudFront-VPCOrigins-Service-SG`, is still in the VPC. CloudFront removes it some time after the VPC origin is deleted. | Nothing that costs money is left. Run the `destroy` again later, or leave the VPC for the next release to reuse ([Parking staging](#parking-staging)). |
 | Recreating staging fails with `You can't create this secret because a secret with this name is already scheduled for deletion` | A deleted secret keeps its name during its recovery window. Staging's window is 0 days, so something changed that. | `aws secretsmanager delete-secret --force-delete-without-recovery --secret-id <name>` frees the name |
+| An apply waits at `aws_acm_certificate_validation` until it times out, and the certificate stays `PENDING_VALIDATION` | ACM can't see the validation record, because the domain delegates to other name servers than the zone's. For example, the zone was recreated, which gives it new name servers. | Compare `dig NS shipscope.net` with `terraform -chdir=infra/bootstrap output name_servers`, and update the registration's name servers in the Route 53 console to match |
+| An environment's plan fails with `reading Secrets Manager Secret (shipscope/<environment>/integrations): couldn't find resource` | The environment looks up its `integrations` secret, which the bootstrap stack creates | Apply `bootstrap/` first |
 
 ### Pipeline
 
@@ -363,6 +431,9 @@ docker run --rm -v "$PWD/infra:/data" -v shipscope-tflint:/root/.tflint.d \
 | `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity` | The job's token doesn't match the role's trust policy. The subject must use the repository's immutable format with numeric IDs, a job in a GitHub environment sends `…:environment:<name>` instead of its branch, and the job needs the `id-token: write` permission. | Compare the trust policy with the prefix that `gh api repos/ValentinCasanova/shipscope/actions/oidc/customization/sub` prints |
 | `deploy-prod` sits at "Waiting for review" | Prod deploys need your approval | Approve it on the run page. When several runs wait, approve the newest and cancel the rest. |
 | `Run migrations` fails with `InconsistentMigrationHistory: Migration admin.0001_initial is applied before its dependency accounts.0001_initial` | The database applied Django's built-in migrations before the custom user model existed, and missed the one-time reset, or was restored from a backup older than it. Migrations run before the rollout, so the service keeps running the previous release. | Check that the database holds no users, groups, or admin log entries you need. Then unapply `auth`, which also drops the `admin` tables, with code from before the custom user model, and re-run the failed deploy job. After a failed release, the service's own revision has that code: `TASK_DEFINITION=$(aws ecs describe-services --cluster shipscope-<environment> --services shipscope-<environment>-api --query 'services[0].taskDefinition' --output text) infra/scripts/run-migrations.sh <environment> auth zero` |
+| `Run migrations` fails with `ResourceInitializationError: unable to pull secrets or registry auth`, and names the `integrations` secret | The task definition names a key that `shipscope/<environment>/integrations` doesn't hold | List the secret's keys and set the missing one ([Secrets](#secrets)), then re-run the failed job |
+| `Run migrations` fails, and the log shows only the exception's type | The whole output stays out of the public log, because it can quote database rows | Run the `aws logs get-log-events` command the log prints |
+| Re-running an old deploy job fails at `Terraform apply` with `already exists` | The run is from before the custom domain, and its configuration creates the `integrations` secret, which the bootstrap stack now holds | Deploy the old image by hand with the current configuration ([Rolling back](#rolling-back)) |
 | `Run migrations` fails with `ModuleNotFoundError: No module named 'django_migration_linter'` | A migration uses the linter's `IgnoreMigration()`, and the production image installs no development packages. CI passed, because the tests run with them. | Remove the operation, and add the migration's name to `IGNORED_MIGRATIONS` in `backend/config/tests/test_migrations.py` instead ([Changing the schema](#changing-the-schema)) |
 | A rolled-back deployment counts as a success | Something waits with `aws ecs wait services-stable`, which succeeds once the rolled-back service is stable again | Wait with `roll-out-backend.sh`, which checks the deployment's own status |
 | `tflint --init` fails with a GitHub API rate limit error | tflint downloads plugins through GitHub's API, which limits anonymous requests from shared runner addresses | Pass `GITHUB_TOKEN` to the step, as `pipeline.yml` does |
@@ -378,7 +449,8 @@ docker run --rm -v "$PWD/infra:/data" -v shipscope-tflint:/root/.tflint.d \
 | Healthy tasks get replaced over and over while the database is unreachable | The health check timeout isn't longer than Django's 5-second database `connect_timeout` | Keep the 10-second timeout in `modules/environment/alb.tf` |
 | The task logs `connection timeout expired` when connecting to the database | The database's security group doesn't admit the tasks' group, or the tasks' group can't send to port 5432 | Check the security group chain in [Architecture](#architecture) |
 | A task stops with `ResourceInitializationError: unable to pull secrets or registry auth` | The execution role can't read a secret, or the task has no public IP and so no route to Secrets Manager or ECR, or the task definition names a JSON key the secret doesn't have | Check the execution role's policy, the service's `assign_public_ip`, and the secret's keys |
-| Signing in to the Django admin fails with `Origin checking failed - https://….cloudfront.net does not match any trusted origins` | Django thinks the request came over HTTP: the path's origin request policy doesn't forward `CloudFront-Forwarded-Proto`, or `DJANGO_BEHIND_CLOUDFRONT` isn't set | Use `Managed-AllViewerAndCloudFrontHeaders-2022-06` on `/api/*` and `/admin/*`, and set the variable |
+| Signing in to the Django admin fails with `Origin checking failed - https://shipscope.net does not match any trusted origins` | Django thinks the request came over HTTP: the path's origin request policy doesn't forward `CloudFront-Forwarded-Proto`, or `DJANGO_BEHIND_CLOUDFRONT` isn't set | Use `Managed-AllViewerAndCloudFrontHeaders-2022-06` on `/api/*` and `/admin/*`, and set the variable |
 | API errors come back as 200 with the React page | The distribution has custom error responses, which apply to every origin | Remove them. The SPA routing function handles the app's routes. |
 | `/admin` without a trailing slash shows the React app | The `/admin/*` path needs the slash, so the S3 path served the request | Use `/admin/` |
-| Staging's URL changed | Recreating staging creates a new distribution, and every distribution gets its own domain | Expected after [parking](#parking-staging). The newest deploy's job summary shows the current URL. |
+| `https://d….cloudfront.net` redirects to the environment's domain | The viewer-request functions redirect every host but the domain | Expected. Use the domain. |
+| The domain doesn't resolve just after staging comes back, while `dig @ns-81.awsdns-10.com staging.shipscope.net` answers | A resolver that looked the name up while staging was parked remembers that it didn't exist, for up to 15 minutes, the zone's negative-caching time | Wait, or try another network's resolver |

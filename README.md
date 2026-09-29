@@ -144,6 +144,14 @@ The health endpoint returns 200 whenever the Django process is running, even whi
 
 Every other endpoint requires a signed-in session unless its view opts out. A signed-out request gets **401**, and a request the user isn't allowed to make gets 403. The API accepts only the session cookie: no passwords, no tokens. Requests that change something (`POST`, `PUT`, `PATCH`, `DELETE`) must send the `csrftoken` cookie's value in an `X-CSRFToken` header, which the frontend's API client (`frontend/src/api/client.ts`) does.
 
+Each user sees only their own order data. Every order model's `for_user(user)` keeps only that user's rows: orders by their `user`, and shipments, rates, and anomaly flags through their order. A view that serves order data lists `OwnedByUserMixin` (`backend/orders/permissions.py`) ahead of DRF's classes:
+
+- The mixin narrows the view's queryset with `for_user()`, so a list holds only the user's own objects, and another user's object answers **404**, the same as one that doesn't exist. A 403 would confirm that it exists.
+- It also adds the `IsOwner` permission, which checks each single object again, in case a view fetches it some other way.
+- `backend/orders/tests/test_scoping.py` fails for any view that doesn't use the mixin, unless the test lists it as serving no order data, with the reason.
+
+The Django admin isn't scoped: staff see every user's data.
+
 ## Signing in
 
 People sign in with their Google account. Django runs the whole OAuth flow and gives the browser only a session cookie, so no Google token ever reaches JavaScript. This is the backend-for-frontend pattern that RFC 10017 recommends for browser apps with a backend.

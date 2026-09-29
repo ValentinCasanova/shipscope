@@ -74,6 +74,8 @@ Settings come from environment variables. Compose passes the repo-root `.env` to
 | `DJANGO_ALLOWED_HOSTS` | backend | `localhost,127.0.0.1` | Comma-separated host names Django serves |
 | `DJANGO_BEHIND_CLOUDFRONT` | backend | Not set | `true` in AWS: trust CloudFront's `CloudFront-Forwarded-Proto` header to tell whether the browser used HTTPS. Only safe where nothing but CloudFront can reach the app. |
 | `DJANGO_LOG_FORMAT` | backend, Gunicorn | Not set | `plain` when unset. `json` in AWS: one JSON object per line, for Django's and Gunicorn's logs |
+| `GOOGLE_OAUTH_CLIENT_ID` | backend | The local client's ID | The environment's OAuth client from Google's console ([Signing in](#signing-in)). Public: every sign-in URL contains it. Signing in answers "Google sign-in isn't configured" while it or the secret is empty. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | backend | The local client's secret | Secret. In AWS it comes from `shipscope/<env>/integrations` in Secrets Manager |
 | `POSTGRES_DB` | db, backend | `shipscope` | |
 | `POSTGRES_USER` | db, backend | `shipscope` | |
 | `POSTGRES_PASSWORD` | db, backend | `shipscope-local` | Required. For local use only. |

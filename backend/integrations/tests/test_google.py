@@ -315,7 +315,16 @@ def test_valid_id_token_returns_the_identity(client, keys):
     assert identity.sub == SUB
     assert identity.email == "ada@example.com"
     assert identity.email_verified is True
-    assert identity.name == "Ada Lovelace"
+    assert identity.given_name == "Ada"
+    assert identity.family_name == "Lovelace"
+
+
+def test_a_name_without_parts_becomes_the_given_name(client, keys):
+    token = fake_google.id_token(name="Prince", given_name=None, family_name=None)
+
+    identity = client.verify_id_token(token, nonce=NONCE)
+
+    assert (identity.given_name, identity.family_name) == ("Prince", "")
 
 
 def test_either_issuer_form_is_accepted(client, keys):

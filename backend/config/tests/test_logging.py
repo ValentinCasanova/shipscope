@@ -81,15 +81,26 @@ def wait_until_listening(server: subprocess.Popen[str], port: int) -> None:
     raise AssertionError("Gunicorn didn't start listening within 20 seconds")
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 def http_status(url: str) -> int:
+    """The status of a GET to this URL. A redirect isn't followed."""
+    opener = urllib.request.build_opener(_NoRedirects)
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310 (a local URL)
+        with opener.open(url, timeout=5) as response:
             return response.status
     except urllib.error.HTTPError as error:
         return error.code
 
 
-def test_gunicorn_and_django_write_each_record_once_as_json():
+def run_gunicorn(*paths: str) -> tuple[list[int], list[dict]]:
+    """Start Gunicorn as the image does, with JSON logs, and request each path.
+
+    Returns each response's status code, and every record Gunicorn and Django logged.
+    """
     port = free_port()
     # The Dockerfile's command, on a local port. Gunicorn loads gunicorn.conf.py from
     # the working directory, as it does in the image.
@@ -123,20 +134,42 @@ def test_gunicorn_and_django_write_each_record_once_as_json():
     )
     try:
         wait_until_listening(server, port)
-        # Django logs a warning for a 404, without touching the database.
-        status = http_status(f"http://127.0.0.1:{port}/api/does-not-exist/")
+        statuses = [http_status(f"http://127.0.0.1:{port}{path}") for path in paths]
     finally:
         server.terminate()
         stdout, stderr = server.communicate(timeout=30)
 
-    assert status == 404
     records = [json.loads(line) for line in (stdout + stderr).splitlines()]
+    return statuses, records
+
+
+def test_gunicorn_and_django_write_each_record_once_as_json():
+    # Django logs a warning for a 404, without touching the database.
+    statuses, records = run_gunicorn("/api/does-not-exist/")
+
+    assert statuses == [404]
     access = [r for r in records if r["logger"] == "gunicorn.access"]
     not_found = [r for r in records if r["message"] == "Not Found: /api/does-not-exist/"]
     assert len(access) == 1
     assert '"GET /api/does-not-exist/ HTTP/1.1" 404' in access[0]["message"]
     assert [(r["level"], r["logger"]) for r in not_found] == [("WARNING", "django.request")]
     assert any(
-        r["logger"] == "gunicorn.error" and f"Listening at: http://127.0.0.1:{port}" in r["message"]
+        r["logger"] == "gunicorn.error" and "Listening at: http://127.0.0.1:" in r["message"]
         for r in records
     )
+
+
+def test_access_log_leaves_out_the_query_string():
+    # Google's redirect after signing in. Without a session, the callback refuses it
+    # without touching the database.
+    statuses, records = run_gunicorn(
+        "/api/auth/google/callback/?code=4/0Asecret-code&state=secret-state"
+    )
+
+    assert statuses == [302]
+    access = [r for r in records if r["logger"] == "gunicorn.access"]
+    assert len(access) == 1
+    assert '"GET /api/auth/google/callback/ HTTP/1.1" 302' in access[0]["message"]
+    logged = json.dumps(records)
+    assert "secret-code" not in logged
+    assert "secret-state" not in logged

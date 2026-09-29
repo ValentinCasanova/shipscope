@@ -1,14 +1,22 @@
 """Gunicorn settings, loaded automatically from the working directory at startup.
 
-The Dockerfile's command line sets everything else. This file only changes the log
-format: with DJANGO_LOG_FORMAT=json, Gunicorn's own records (startup, workers, and the
-access log) use the same JSON format as Django's, so every line of output is JSON.
-Gunicorn reads the variable from its environment, before Django loads .env.
+The Dockerfile's command line sets everything else. This file only changes logging:
+
+- The access log records each request's path without its query string, which can hold
+  secrets: Google's redirect to the sign-in callback carries a one-time code and the
+  flow's state in it.
+- With DJANGO_LOG_FORMAT=json, Gunicorn's own records (startup, workers, and the access
+  log) use the same JSON format as Django's, so every line of output is JSON. Gunicorn
+  reads the variable from its environment, before Django loads .env.
 """
 
 import os
 
 from config.logs import FORMATTERS
+
+# Gunicorn's default format, with "%(r)s" (the request line, query string included)
+# replaced by the method, the path alone, and the protocol.
+access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(m)s %(U)s %(H)s" %(s)s %(b)s "%(f)s" "%(a)s"'
 
 if os.environ.get("DJANGO_LOG_FORMAT") == "json":
     logconfig_dict = {

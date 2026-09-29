@@ -107,7 +107,9 @@ class GoogleIdentity:
     sub: str
     email: str
     email_verified: bool
-    name: str
+    # Both can be blank: Google leaves out what the account doesn't have.
+    given_name: str
+    family_name: str
 
 
 def new_state() -> str:
@@ -264,11 +266,17 @@ class GoogleOAuthClient:
             raise InvalidIdToken(f"{type(error).__name__}: {error}") from error
         if not hmac.compare_digest(str(claims["nonce"]), nonce):
             raise InvalidIdToken("The nonce doesn't match this sign-in")
+        given_name = str(claims.get("given_name", ""))
+        family_name = str(claims.get("family_name", ""))
+        if not (given_name or family_name):
+            # A name that doesn't split into the two parts.
+            given_name = str(claims.get("name", ""))
         return GoogleIdentity(
             sub=str(claims["sub"]),
             email=str(claims.get("email", "")),
             email_verified=claims.get("email_verified") is True,
-            name=str(claims.get("name", "")),
+            given_name=given_name,
+            family_name=family_name,
         )
 
     def _client_credentials(self) -> dict[str, str]:

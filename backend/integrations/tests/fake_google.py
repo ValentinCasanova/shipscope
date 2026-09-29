@@ -60,6 +60,8 @@ def id_token(
         "email": "ada@example.com",
         "email_verified": True,
         "name": "Ada Lovelace",
+        "given_name": "Ada",
+        "family_name": "Lovelace",
         "nonce": NONCE,
         "iat": now,
         "exp": now + 3600,

@@ -1,0 +1,64 @@
+/* A few plain styles until the component library arrives with the dashboard. */
+
+:root {
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  color: #1f1f1f;
+  background: #fff;
+}
+
+body {
+  margin: 0;
+}
+
+main,
+footer {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #ddd;
+}
+
+.app-header nav {
+  display: flex;
+  gap: 1rem;
+  flex: 1;
+}
+
+.app-header .app-name {
+  font-weight: 600;
+  text-decoration: none;
+  color: inherit;
+}
+
+.app-header a.active {
+  font-weight: 600;
+}
+
+.home .lead {
+  font-size: 1.25rem;
+}
+
+.sign-in-button {
+  display: inline-block;
+  line-height: 0;
+}
+
+footer {
+  border-top: 1px solid #ddd;
+  font-size: 0.875rem;
+}
+
+[role='alert'] {
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid #b3261e;
+  background: #fdecea;
+}

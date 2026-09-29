@@ -132,6 +132,20 @@ DATABASES = {
 AUTH_USER_MODEL = "accounts.User"
 
 
+# Signing in with Google (accounts/views.py)
+
+# The environment's OAuth client from Google's console. Without them, signing in answers
+# that Google sign-in isn't configured, and everything else works.
+GOOGLE_OAUTH_CLIENT_ID = env("GOOGLE_OAUTH_CLIENT_ID", default="")
+GOOGLE_OAUTH_CLIENT_SECRET = env("GOOGLE_OAUTH_CLIENT_SECRET", default="")
+
+# Django's default, set explicitly because signing in depends on it. Google's redirect
+# back to the callback is a navigation from another site: browsers send a Lax cookie
+# with it, but not a Strict one, and the callback needs the session that holds the
+# flow's state. Lax still keeps the cookie off cross-site POSTs and fetches.
+SESSION_COOKIE_SAMESITE = "Lax"
+
+
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
@@ -179,6 +193,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Django REST framework
 
 REST_FRAMEWORK = {
+    # The Django session that signing in starts, and nothing else. DRF's defaults also
+    # accept HTTP Basic credentials, which would let anyone try passwords on any
+    # endpoint. This class answers 401 to signed-out requests (see its docstring).
+    "DEFAULT_AUTHENTICATION_CLASSES": ["accounts.authentication.SessionAuthentication"],
     # Secure by default: every endpoint requires an authenticated user unless the
     # view explicitly opts out.
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],

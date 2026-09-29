@@ -6,7 +6,7 @@ A rate-shopping and order-sync dashboard: sign in with Google, connect a Google 
 
 **Stack:** React + TypeScript (Vite) · Django REST Framework · PostgreSQL · Docker · AWS (ECS Fargate, RDS, S3 + CloudFront) via Terraform · GitHub Actions
 
-> **Status: deployed.** The first slice, a Django API with a health endpoint and a React page that shows whether the API and the database are up, runs locally and in AWS. So does the [data model](#data-model), which you can browse in the Django admin. Every merge to `main` is linted, tested, and built, then deployed to staging, and to prod after approval. The product features come next.
+> **Status: deployed.** You can [sign in with Google](#signing-in) and reach a signed-in page. The [data model](#data-model) is in place, and you can browse it in the Django admin. Every merge to `main` is linted, tested, and built, then deployed to staging, and to prod after approval. The product features come next.
 >
 > **Live:** https://shipscope.net
 
@@ -37,7 +37,7 @@ sed -i "s/^DJANGO_SECRET_KEY=$/DJANGO_SECRET_KEY=$(python3 -c 'import secrets; p
 docker compose up --build
 ```
 
-Open http://localhost:5173. The page shows **API: ok** and **Database: ok**. http://localhost:8000/api/health/ returns the same status as JSON.
+Open http://localhost:5173. The home page's footer shows **API: ok** and **Database: ok**. http://localhost:8000/api/health/ returns the same status as JSON. To sign in, you also need a Google OAuth client: see [Signing in locally](#signing-in-locally).
 
 - The first run downloads base images and installs dependencies, which takes a few minutes. Later starts take about 10 to 20 seconds.
 - On its first start, the backend creates the database tables before it accepts requests. If the page shows "API unavailable", reload it a few seconds later.
@@ -74,6 +74,8 @@ Settings come from environment variables. Compose passes the repo-root `.env` to
 | `DJANGO_ALLOWED_HOSTS` | backend | `localhost,127.0.0.1` | Comma-separated host names Django serves |
 | `DJANGO_BEHIND_CLOUDFRONT` | backend | Not set | `true` in AWS: trust CloudFront's `CloudFront-Forwarded-Proto` header to tell whether the browser used HTTPS. Only safe where nothing but CloudFront can reach the app. |
 | `DJANGO_LOG_FORMAT` | backend, Gunicorn | Not set | `plain` when unset. `json` in AWS: one JSON object per line, for Django's and Gunicorn's logs |
+| `GOOGLE_OAUTH_CLIENT_ID` | backend | The local client's ID | The environment's OAuth client from Google's console ([Signing in](#signing-in)). Public: every sign-in URL contains it. Signing in answers "Google sign-in isn't configured" while it or the secret is empty. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | backend | The local client's secret | Secret. In AWS it comes from `shipscope/<env>/integrations` in Secrets Manager |
 | `POSTGRES_DB` | db, backend | `shipscope` | |
 | `POSTGRES_USER` | db, backend | `shipscope` | |
 | `POSTGRES_PASSWORD` | db, backend | `shipscope-local` | Required. For local use only. |
@@ -133,8 +135,55 @@ The gitleaks hook scans only the changes being committed. To scan every commit i
 | Endpoint | Authentication | Response |
 |---|---|---|
 | `GET /api/health/` | None | `{"status": "ok", "database": "ok"}`, or `"database": "unavailable"` when the database doesn't answer a `SELECT 1` |
+| `GET /api/auth/google/login/?next=/orders` | None | A redirect to Google's sign-in screen. A page navigation, not an API call. `next` must be a path in the app, or it becomes `/orders`. |
+| `GET /api/auth/google/callback/` | None | Where Google sends the browser back. Signs the user in and redirects to `next`, or to `/?signin=cancelled` or `/?signin=failed` |
+| `GET /api/auth/session/` | None | `{"user": {"id": 7, "email": "…", "name": "…"}}`, or `{"user": null}` when signed out. Sets the `csrftoken` cookie. |
+| `DELETE /api/auth/session/` | Session, with `X-CSRFToken` | 204: signed out |
 
-The health endpoint returns 200 whenever the Django process is running, even while the database is down, so a load balancer doesn't replace working containers during a database outage. Django REST framework is configured to require authentication by default, so every endpoint added later is closed unless its view opts out.
+The health endpoint returns 200 whenever the Django process is running, even while the database is down, so a load balancer doesn't replace working containers during a database outage.
+
+Every other endpoint requires a signed-in session unless its view opts out. A signed-out request gets **401**, and a request the user isn't allowed to make gets 403. The API accepts only the session cookie: no passwords, no tokens. Requests that change something (`POST`, `PUT`, `PATCH`, `DELETE`) must send the `csrftoken` cookie's value in an `X-CSRFToken` header, which the frontend's API client (`frontend/src/api/client.ts`) does.
+
+## Signing in
+
+People sign in with their Google account. Django runs the whole OAuth flow and gives the browser only a session cookie, so no Google token ever reaches JavaScript. This is the backend-for-frontend pattern that RFC 10017 recommends for browser apps with a backend.
+
+```text
+Browser                              Django                                Google
+   │─ GET /api/auth/google/login/ ─────►│ new state, nonce, PKCE verifier:    │
+   │   ?next=/orders                    │ in the session, 10 minutes, once    │
+   │◄─ 302 to Google ───────────────────│                                     │
+   │─ sign-in screen: openid email profile ──────────────────────────────────►│
+   │◄─ 302 to /api/auth/google/callback/?code&state ──────────────────────────│
+   │─ GET the callback ────────────────►│ state matches this browser's flow   │
+   │                                    │─ code + secret + PKCE verifier ────►│
+   │                                    │◄─ ID token ─────────────────────────│
+   │                                    │ ID token checked: signature,        │
+   │                                    │ issuer, audience, expiry, nonce     │
+   │                                    │ user found by Google ID, or created │
+   │◄─ 302 to /orders, new session ID ──│                                     │
+```
+
+- **`state`** ties Google's redirect to the browser that started the sign-in, so an attacker can't sign a victim in to the attacker's account. **`nonce`** ties the ID token to this sign-in. **PKCE** makes a stolen code useless without the verifier, which never leaves the server.
+- Users are found by their Google account ID (the ID token's `sub`), never by email: an address can change and later belong to someone else. A new user gets an unusable password, so only Google signs them in. Name and email are copied from Google at every sign-in.
+- Signing in asks Google only for the account's name and email address, so the consent screen shows no warning, and Google needs no app review.
+- The session cookie lasts two weeks, is `HttpOnly`, `Secure` in AWS, and `SameSite=Lax`. `Lax` rather than `Strict`, because Google's redirect back to the callback is a navigation from another site, and it has to carry the cookie that holds the flow.
+- Signing out deletes the session on the server, so a copied cookie stops working too.
+- Logs record sign-ins and failures with the user's number and a reason, never a code, token, or email address. Gunicorn's access log leaves out query strings, where the callback's code travels.
+
+The code is in `backend/integrations/google.py` (Google's endpoints), `backend/accounts/views.py` (the flow), and `backend/accounts/services.py` (finding or creating the user). In the frontend, `AuthGuard` sends signed-out visitors from the signed-in pages to the home page, with `?next=` set so they come back after signing in.
+
+### Signing in locally
+
+Each environment has its own OAuth client in the `shipscope` Google Cloud project, and so its own secret. Locally:
+
+1. Get the local client's ID and secret from the project's owner, or create your own client: in [Google Cloud's console](https://console.cloud.google.com/), under Google Auth Platform → Clients, create a client of type **Web application** with the redirect URL `http://localhost:5173/api/auth/google/callback/` and no JavaScript origins. Google shows the secret only once.
+2. Put them in `.env` as `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`, then `docker compose up -d backend` to restart the backend with them.
+3. Open the app at exactly **http://localhost:5173**, not `127.0.0.1` or port 8000. Google accepts only the redirect URL registered for the client.
+
+Without the two values, the app runs, and the sign-in button answers "Google sign-in isn't configured". Tests and CI never call Google: `responses` fakes its endpoints, and a test key signs the ID tokens.
+
+Compose runs Django's development server, which logs every request with its query string, so the local log shows the callback's code. In AWS, Gunicorn serves the app and leaves query strings out.
 
 ## Data model
 
@@ -258,8 +307,8 @@ lint ─┬─ test-backend  ─┬─ build-backend  ─┬─ deploy-staging �
 
 | Path | Contents |
 |---|---|
-| `backend/` | Django REST API, managed with uv. `config/` holds the settings and URL routes, `core/` the health endpoint, `accounts/` the users and their Google accounts, and `orders/` the orders, shipments, rates, and anomaly flags. |
-| `frontend/` | React + TypeScript app built with Vite. `src/api/` holds the typed API client, and `src/components/` the UI. |
+| `backend/` | Django REST API, managed with uv. `config/` holds the settings and URL routes, `core/` the health endpoint, `accounts/` the users, their Google accounts, and signing in, `integrations/` the clients for outside APIs, and `orders/` the orders, shipments, rates, and anomaly flags. |
+| `frontend/` | React + TypeScript app built with Vite. `src/router.tsx` lists the pages, which live in `src/pages/`. `src/api/` holds the typed API client, `src/auth/` the session hooks and `AuthGuard`, and `src/components/` the shared UI. |
 | `infra/` | Terraform and deploy scripts for the AWS environments. See [`infra/README.md`](infra/README.md). |
 | `.github/` | The GitHub Actions pipeline and Dependabot's configuration |
 | `docker-compose.yml` | The local development stack |
@@ -289,4 +338,9 @@ lint ─┬─ test-backend  ─┬─ build-backend  ─┬─ deploy-staging �
 | `migrate`, or the backend container at startup, fails with `InconsistentMigrationHistory: Migration admin.0001_initial is applied before its dependency accounts.0001_initial` | Your database applied Django's built-in migrations before the custom user model existed | `docker compose down -v`, which deletes the local database, then `docker compose up`. For staging or prod, see [`infra/README.md`](infra/README.md#pipeline). |
 | `makemigrations --check` reports `No changes detected` although a model changed | The app has no `migrations` package, and without an app label `makemigrations` skips such apps | Keep a `migrations/__init__.py` in every app, as `startapp` creates |
 | Pushing a change to `.github/workflows/` fails with `refusing to allow an OAuth App to create or update workflow … without workflow scope` | git pushed over HTTPS with the GitHub CLI's token, which lacks the `workflow` scope | Push over SSH, or run `gh auth refresh -s workflow` |
+| Google shows `Error 400: redirect_uri_mismatch` | The app was opened at another address than the one registered for the client, such as `127.0.0.1:5173` or `localhost:8000`, or the client ID belongs to another environment | Open http://localhost:5173. Compare the `redirect_uri` in Google's error details with the client's redirect URL |
+| Back from Google, the home page says signing in didn't work, and the backend log says `Google sign-in failed: unknown_state` | The session cookie that holds the flow didn't come back: the sign-in started on another host (such as `127.0.0.1`), the browser blocks cookies, or more than 10 minutes passed (then the log says `flow_expired`) | Start again from the app's own address |
+| The sign-in button shows "Google sign-in isn't configured." | `GOOGLE_OAUTH_CLIENT_ID` or `GOOGLE_OAUTH_CLIENT_SECRET` is empty in the backend's environment | Set both in `.env` ([Signing in locally](#signing-in-locally)), then `docker compose up -d backend` |
+| A request answers `403` with `CSRF Failed: CSRF token missing` | The request didn't send `X-CSRFToken`: the `csrftoken` cookie wasn't set yet, or the request bypassed the API client | Send requests through `src/api/client.ts`. `GET /api/auth/session/` sets the cookie |
+| Vite or TypeScript can't resolve `react-router-dom` | React Router 8 removed that package | Import from `react-router`, and `RouterProvider` from `react-router/dom` |
 | A frontend test of an error state is slow or times out | TanStack Query retries a failed query 3 times by default | Render with `renderWithQueryClient` from `src/test/render.tsx`, which turns retries off |

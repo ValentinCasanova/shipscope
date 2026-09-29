@@ -9,7 +9,9 @@ dependencies = [
     "djangorestframework>=3.18.1",
     "gunicorn>=26.2.0",
     "psycopg[binary]>=3.3.5",
+    "pyjwt[crypto]>=2.15.0",
     "python-json-logger>=4.2.0",
+    "requests>=2.34.2",
     "whitenoise>=6.12.0",
 ]
 
@@ -19,6 +21,7 @@ dev = [
     "factory-boy>=3.3.3",
     "pytest>=9.1.1",
     "pytest-django>=4.14.0",
+    "responses>=0.26.3",
     "ruff>=0.16.7",
 ]
 
@@ -36,8 +39,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# pytest relies on plain assert statements.
-"**/tests/**" = ["S101"]
+# pytest relies on plain assert statements, and tests use made-up secrets and tokens.
+"**/tests/**" = ["S101", "S105", "S106"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings"

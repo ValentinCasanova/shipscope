@@ -5,7 +5,7 @@ import { Link } from 'react-router';
 // Anthropic (8.x).
 const LAST_UPDATED = '2026-09-29';
 const OPERATOR = 'Valentin Casanova';
-const CONTACT_EMAIL = 'TODO@example.com';
+const CONTACT_EMAIL = 'vkcnova@gmail.com';
 
 /** The privacy policy, which Google's consent screen links to. */
 function Privacy() {
@@ -16,8 +16,7 @@ function Privacy() {
 
       <h2>Who runs ShipScope</h2>
       <p>
-        ShipScope is a portfolio project built and run by {OPERATOR}. It
-        isn&apos;t a commercial service, and it has no ads. Questions and
+        ShipScope is a project built and run by {OPERATOR}. Questions and
         requests go to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
       </p>
 

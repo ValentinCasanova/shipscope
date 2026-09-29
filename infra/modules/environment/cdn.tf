@@ -1,7 +1,7 @@
-# CloudFront, the environment's only public entry point. On one HTTPS domain it serves
-# the React build from a private S3 bucket and forwards /api/*, /admin/*, and /static/*
-# to the internal load balancer through a VPC origin, so the browser never makes a
-# cross-origin request.
+# CloudFront, the environment's only public entry point. On the environment's domain
+# (domain.tf) it serves the React build from a private S3 bucket and forwards /api/*,
+# /admin/*, and /static/* to the internal load balancer through a VPC origin, so the
+# browser never makes a cross-origin request.
 
 resource "aws_s3_bucket" "frontend" {
   bucket_prefix = "${local.name}-frontend-"
@@ -71,12 +71,37 @@ resource "aws_cloudfront_vpc_origin" "api" {
   }
 }
 
-resource "aws_cloudfront_function" "spa_routing" {
-  name    = "${local.name}-spa-routing"
+# One function per kind of behavior, from one template. Both redirect other hosts to the
+# domain; only the frontend's also serves index.html for the React app's routes.
+resource "aws_cloudfront_function" "viewer_request" {
+  for_each = {
+    frontend = { spa_routing = true, comment = "Redirect to ${var.domain}; serve index.html for client-side routes" }
+    api      = { spa_routing = false, comment = "Redirect to ${var.domain}" }
+  }
+
+  name    = "${local.name}-${each.key}-request"
   runtime = "cloudfront-js-2.0"
-  comment = "Serve index.html for the React app's client-side routes"
+  comment = each.value.comment
   publish = true
-  code    = file("${path.module}/functions/spa-routing.js")
+  code = templatefile("${path.module}/functions/viewer-request.js", {
+    domain      = var.domain
+    spa_routing = each.value.spa_routing
+  })
+
+  # A new name replaces a function, and CloudFront refuses to delete one that a
+  # distribution still uses. So the new function comes first, then the distribution
+  # switches to it, and only then is the old one deleted.
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Until 4.0, the frontend's function only served index.html. Moving it here makes its new
+# name a replacement, which create_before_destroy orders safely. Without the move,
+# Terraform would delete the old function before updating the distribution.
+moved {
+  from = aws_cloudfront_function.spa_routing
+  to   = aws_cloudfront_function.viewer_request["frontend"]
 }
 
 # AWS-managed policies, looked up by name.
@@ -108,6 +133,10 @@ resource "aws_cloudfront_distribution" "main" {
   is_ipv6_enabled     = true
   price_class         = "PriceClass_100"
 
+  # The environment's domain. The distribution still answers on its own d….cloudfront.net
+  # name too, where the viewer-request functions redirect to the domain.
+  aliases = [var.domain]
+
   origin {
     origin_id                = "frontend"
     domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
@@ -124,7 +153,8 @@ resource "aws_cloudfront_distribution" "main" {
   }
 
   # No custom error responses: they'd apply to the API too, turning its 404s into 200s
-  # with the React page. The SPA routing function handles client-side routes instead.
+  # with the React page. The frontend's viewer-request function handles client-side
+  # routes instead.
   default_cache_behavior {
     target_origin_id           = "frontend"
     viewer_protocol_policy     = "redirect-to-https"
@@ -136,7 +166,7 @@ resource "aws_cloudfront_distribution" "main" {
 
     function_association {
       event_type   = "viewer-request"
-      function_arn = aws_cloudfront_function.spa_routing.arn
+      function_arn = aws_cloudfront_function.viewer_request["frontend"].arn
     }
   }
 
@@ -155,6 +185,11 @@ resource "aws_cloudfront_distribution" "main" {
       cache_policy_id            = data.aws_cloudfront_cache_policy.caching_disabled.id
       origin_request_policy_id   = data.aws_cloudfront_origin_request_policy.all_viewer_and_cloudfront_headers.id
       response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security_headers.id
+
+      function_association {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.viewer_request["api"].arn
+      }
     }
   }
 
@@ -170,6 +205,11 @@ resource "aws_cloudfront_distribution" "main" {
     cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
     origin_request_policy_id   = data.aws_cloudfront_origin_request_policy.all_viewer_and_cloudfront_headers.id
     response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security_headers.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.viewer_request["api"].arn
+    }
   }
 
   restrictions {
@@ -178,8 +218,12 @@ resource "aws_cloudfront_distribution" "main" {
     }
   }
 
-  # The default *.cloudfront.net certificate; a custom domain is out of scope for 2.0.
+  # The domain's certificate (domain.tf), once ACM has issued it. Every current browser
+  # sends SNI; serving browsers that don't would take dedicated IP addresses, at $600 a
+  # month.
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn      = aws_acm_certificate_validation.main.certificate_arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
   }
 }

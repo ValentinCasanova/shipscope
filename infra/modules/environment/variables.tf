@@ -18,6 +18,36 @@ variable "backend_image" {
   }
 }
 
+variable "domain" {
+  description = "The environment's public domain, such as staging.shipscope.net. Django accepts only this host, and CloudFront redirects every other host to it."
+  type        = string
+
+  validation {
+    condition     = can(regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$", var.domain))
+    error_message = "domain must be a lowercase host name, such as staging.shipscope.net, without a scheme or a trailing dot."
+  }
+}
+
+variable "hosted_zone" {
+  description = "Name of the Route 53 hosted zone that holds the domain's records, created in infra/bootstrap."
+  type        = string
+
+  validation {
+    condition     = var.domain == var.hosted_zone || endswith(var.domain, ".${var.hosted_zone}")
+    error_message = "domain must be the hosted zone's name or a name under it."
+  }
+}
+
+variable "google_oauth_client_id" {
+  description = "ID of the environment's OAuth client in the Google Cloud project. Client IDs are public: every sign-in URL carries one."
+  type        = string
+
+  validation {
+    condition     = endswith(var.google_oauth_client_id, ".apps.googleusercontent.com")
+    error_message = "google_oauth_client_id must be a Google OAuth client ID, ending in .apps.googleusercontent.com."
+  }
+}
+
 variable "vpc_cidr" {
   description = "IPv4 range of the environment's VPC, a /16. Each environment gets its own, so the two can be peered later."
   type        = string

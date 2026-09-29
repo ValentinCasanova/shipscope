@@ -48,8 +48,13 @@ output "load_balancer_dns_name" {
   value       = aws_lb.api.dns_name
 }
 
+output "domain" {
+  description = "The environment's public domain. Its URL is https://<domain>."
+  value       = var.domain
+}
+
 output "cloudfront_domain" {
-  description = "The environment's public domain, d….cloudfront.net."
+  description = "The distribution's own domain, d….cloudfront.net, which redirects to the environment's domain."
   value       = aws_cloudfront_distribution.main.domain_name
 }
 

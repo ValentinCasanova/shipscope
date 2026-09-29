@@ -52,13 +52,15 @@ resource "aws_iam_role_policy_attachment" "task_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Add the integrations secret here once the task definition references it (4.0).
+# Exactly the secrets the task definition injects (ecs.tf).
 data "aws_iam_policy_document" "task_execution_secrets" {
   statement {
     actions = ["secretsmanager:GetSecretValue"]
     resources = [
       aws_secretsmanager_secret.django_secret_key.arn,
       aws_secretsmanager_secret.db_password.arn,
+      aws_secretsmanager_secret.token_encryption_key.arn,
+      data.aws_secretsmanager_secret.integrations.arn,
     ]
   }
 }

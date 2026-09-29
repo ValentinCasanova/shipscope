@@ -50,8 +50,13 @@ output "load_balancer_dns_name" {
   value       = module.environment.load_balancer_dns_name
 }
 
+output "domain" {
+  description = "The environment's public domain. Its URL is https://<domain>."
+  value       = module.environment.domain
+}
+
 output "cloudfront_domain" {
-  description = "The environment's public domain, d….cloudfront.net."
+  description = "The distribution's own domain, d….cloudfront.net, which redirects to the environment's domain."
   value       = module.environment.cloudfront_domain
 }
 

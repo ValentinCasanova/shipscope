@@ -20,11 +20,13 @@ resource "aws_cloudwatch_log_group" "api" {
 
 locals {
   api_environment = {
-    # Requests arrive through CloudFront, with the browser's Host header.
-    DJANGO_ALLOWED_HOSTS     = aws_cloudfront_distribution.main.domain_name
+    # Requests arrive through CloudFront, with the browser's Host header. CloudFront
+    # redirects every other host to the domain, so Django accepts only the domain.
+    DJANGO_ALLOWED_HOSTS     = var.domain
     DJANGO_BEHIND_CLOUDFRONT = "true"
     DJANGO_DEBUG             = "false"
     DJANGO_LOG_FORMAT        = "json"
+    GOOGLE_OAUTH_CLIENT_ID   = var.google_oauth_client_id
     POSTGRES_HOST            = aws_db_instance.main.address
     POSTGRES_PORT            = tostring(aws_db_instance.main.port)
     POSTGRES_DB              = aws_db_instance.main.db_name
@@ -55,9 +57,16 @@ resource "aws_ecs_task_definition" "api" {
       essential    = true
       portMappings = [{ containerPort = 8000, protocol = "tcp" }]
       environment  = [for name, value in local.api_environment : { name = name, value = value }]
+      # One key of a JSON secret is referenced as <secret ARN>:<key>::. A task can't start
+      # while the secret lacks that key.
       secrets = [
         { name = "DJANGO_SECRET_KEY", valueFrom = aws_secretsmanager_secret.django_secret_key.arn },
         { name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.db_password.arn },
+        { name = "TOKEN_ENCRYPTION_KEY", valueFrom = aws_secretsmanager_secret.token_encryption_key.arn },
+        {
+          name      = "GOOGLE_OAUTH_CLIENT_SECRET"
+          valueFrom = "${data.aws_secretsmanager_secret.integrations.arn}:GOOGLE_OAUTH_CLIENT_SECRET::"
+        },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -76,10 +85,13 @@ resource "aws_ecs_task_definition" "api" {
   # them.
   skip_destroy = true
 
-  # The secret values must exist before a task can start with this revision.
+  # A task can start with this revision only once the generated secrets have values and
+  # the execution role may read every secret it names.
   depends_on = [
     aws_secretsmanager_secret_version.django_secret_key,
     aws_secretsmanager_secret_version.db_password,
+    aws_secretsmanager_secret_version.token_encryption_key,
+    aws_iam_role_policy.task_execution_secrets,
   ]
 }
 

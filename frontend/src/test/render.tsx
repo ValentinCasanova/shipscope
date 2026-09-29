@@ -1,6 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render } from '@testing-library/react';
 import type { ReactElement } from 'react';
+import { createMemoryRouter } from 'react-router';
+import { RouterProvider } from 'react-router/dom';
+import { createQueryClient } from '../api/queryClient.ts';
+import { routes } from '../router.tsx';
 
 /**
  * Renders `ui` with its own QueryClient, so tests never share cached data. Failed
@@ -16,4 +20,26 @@ export function renderWithQueryClient(ui: ReactElement) {
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     ),
   });
+}
+
+/**
+ * Renders the whole app at `path`, with the real routes in a memory router and
+ * the app's QueryClient, without retries. Returns the router, whose state shows
+ * where the app ended up, and the QueryClient.
+ */
+export function renderApp(path: string) {
+  const queryClient = createQueryClient({ retry: false });
+  const router = createMemoryRouter(routes, { initialEntries: [path] });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+  return { router, queryClient };
+}
+
+/** Where the app is now, as path and query string. */
+export function currentUrl(router: ReturnType<typeof createMemoryRouter>) {
+  const { pathname, search } = router.state.location;
+  return `${pathname}${search}`;
 }

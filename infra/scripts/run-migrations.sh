@@ -8,6 +8,11 @@
 #
 # Extra arguments go to `manage.py migrate`, such as an app label. To run on another
 # revision, such as the one the service runs, set TASK_DEFINITION to its ARN.
+#
+# In GitHub Actions, a failure prints only the exception's type, since anyone can read
+# this public repository's deploy logs, and a failed migration's message can quote rows
+# of users' data. The whole output stays in CloudWatch Logs, and the script prints the
+# command that reads it.
 
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -58,12 +63,32 @@ for _ in {1..8}; do
   fi
   sleep 3
 done
-output=${output:-(CloudWatch Logs has no output from the task)}
 
-if [ "$exit_code" != "0" ]; then
-  log "Migrations failed: exit code $exit_code ($stopped_reason). The task's output:"
-  printf '%s\n' "$output" >&2
+if [ "$exit_code" = "0" ]; then
+  log "Migrations finished. The task's output:"
+  printf '%s\n' "${output:-(CloudWatch Logs has no output from the task)}" >&2
+  exit 0
+fi
+
+log "Migrations failed: exit code $exit_code ($stopped_reason)"
+if [ -z "$output" ] || [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+  log "The task's output:"
+  printf '%s\n' "${output:-(CloudWatch Logs has no output from the task)}" >&2
   exit 1
 fi
-log "Migrations finished. The task's output:"
-printf '%s\n' "$output" >&2
+# The exception is the first unindented line after the last traceback's frames, as in
+# `django.db.utils.IntegrityError: could not create unique index …`. Its message can go
+# on over more lines, such as PostgreSQL's `DETAIL:  Key (email)=(…) is duplicated.`
+# Django prints a CommandError without a traceback, as `CommandError: …`. Keep only the
+# type.
+exception=$(awk '
+  /Traceback \(most recent call last\):$/ { in_traceback = 1; next }
+  in_traceback && /^[^[:space:]]/ { line = $0; in_traceback = 0; next }
+  !in_traceback && /^[A-Za-z_][A-Za-z0-9_]*Error: / { line = $0 }
+  END { if (match(line, /^[A-Za-z_][A-Za-z0-9_.]*/)) print substr(line, RSTART, RLENGTH) }
+' <<<"$output")
+log "Exception: ${exception:-none found in the output}"
+log "The output can quote database rows, so this public log leaves it out. To read it:"
+printf '  aws logs get-log-events --log-group-name %s --log-stream-name %s --start-from-head --query "events[].[message]" --output text\n' \
+  "$log_group" "api/api/$task_id" >&2
+exit 1

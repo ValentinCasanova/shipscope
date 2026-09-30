@@ -6,7 +6,7 @@ A rate-shopping and order-sync dashboard: sign in with Google, connect a Google 
 
 **Stack:** React + TypeScript (Vite) · Django REST Framework · PostgreSQL · Docker · AWS (ECS Fargate, RDS, S3 + CloudFront) via Terraform · GitHub Actions
 
-> **Status: deployed.** You can [sign in with Google](#signing-in) and reach a signed-in page. The [data model](#data-model) is in place, and you can browse it in the Django admin. Every merge to `main` is linted, tested, and built, then deployed to staging, and to prod after approval. The product features come next.
+> **Status: deployed.** You can [sign in with Google](#signing-in), reach a signed-in page, and [connect Google Drive](#connecting-google-drive). The [data model](#data-model) is in place, and you can browse it in the Django admin. Every merge to `main` is linted, tested, and built, then deployed to staging, and to prod after approval. The product features come next.
 >
 > **Live:** https://shipscope.net
 
@@ -76,6 +76,7 @@ Settings come from environment variables. Compose passes the repo-root `.env` to
 | `DJANGO_LOG_FORMAT` | backend, Gunicorn | Not set | `plain` when unset. `json` in AWS: one JSON object per line, for Django's and Gunicorn's logs |
 | `GOOGLE_OAUTH_CLIENT_ID` | backend | The local client's ID | The environment's OAuth client from Google's console ([Signing in](#signing-in)). Public: every sign-in URL contains it. Signing in answers "Google sign-in isn't configured" while it or the secret is empty. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | backend | The local client's secret | Secret. In AWS it comes from `shipscope/<env>/integrations` in Secrets Manager |
+| `TOKEN_ENCRYPTION_KEY` | backend | Random, generated per machine | Secret. The key that encrypts users' Google tokens is derived from it ([Connecting Google Drive](#connecting-google-drive)). Connecting Drive answers "Connecting Google Drive isn't configured" while it's empty. Changing it makes the stored tokens unreadable, and users then connect Drive again. In AWS it's the `shipscope/<env>/token-encryption-key` secret, which Terraform generates. |
 | `POSTGRES_DB` | db, backend | `shipscope` | |
 | `POSTGRES_USER` | db, backend | `shipscope` | |
 | `POSTGRES_PASSWORD` | db, backend | `shipscope-local` | Required. For local use only. |
@@ -137,8 +138,10 @@ The gitleaks hook scans only the changes being committed. To scan every commit i
 | `GET /api/health/` | None | `{"status": "ok", "database": "ok"}`, or `"database": "unavailable"` when the database doesn't answer a `SELECT 1` |
 | `GET /api/auth/google/login/?next=/orders` | None | A redirect to Google's sign-in screen. A page navigation, not an API call. `next` must be a path in the app, or it becomes `/orders`. |
 | `GET /api/auth/google/callback/` | None | Where Google sends the browser back. Signs the user in and redirects to `next`, or to `/?signin=cancelled` or `/?signin=failed` |
-| `GET /api/auth/session/` | None | `{"user": {"id": 7, "email": "…", "name": "…"}}`, or `{"user": null}` when signed out. Sets the `csrftoken` cookie. |
+| `GET /api/auth/session/` | None | `{"user": {"id": 7, "email": "…", "name": "…", "google_drive_connected": false}}`, or `{"user": null}` when signed out. Sets the `csrftoken` cookie. |
 | `DELETE /api/auth/session/` | Session, with `X-CSRFToken` | 204: signed out |
+| `GET /api/auth/google/drive/connect/?next=/settings` | Session | A redirect to Google's consent screen for Drive access. A page navigation, not an API call. Google's redirect comes back to `next` (by default `/settings`) with `?drive=connected`, `cancelled`, `wrong_account`, `not_granted`, or `failed`. A signed-out visitor goes to the home page first. |
+| `DELETE /api/auth/google/drive/` | Session, with `X-CSRFToken` | 204: Drive disconnected. ShipScope's access is revoked at Google, and the stored tokens are deleted. |
 
 The health endpoint returns 200 whenever the Django process is running, even while the database is down, so a load balancer doesn't replace working containers during a database outage.
 
@@ -181,15 +184,24 @@ Browser                              Django                                Googl
 
 The code is in `backend/integrations/google.py` (Google's endpoints), `backend/accounts/views.py` (the flow), and `backend/accounts/services.py` (finding or creating the user). In the frontend, `AuthGuard` sends signed-out visitors from the signed-in pages to the home page, with `?next=` set so they come back after signing in.
 
+### Connecting Google Drive
+
+Reading a user's Sheet of orders needs access to their Google Drive, which users grant separately, on the settings page. ShipScope asks for `drive.file`, which reaches only the files a user opens with ShipScope, never the rest of their Drive. Google classes it as non-sensitive, so its consent screen shows no warning, and the app needs no review.
+
+- **Connecting** runs the sign-in flow again for the signed-in user, with three additions: the `drive.file` scope; `access_type=offline` with `prompt=consent`, so Google returns a refresh token; and `login_hint`, so Google suggests the account the user signs in with. The callback refuses another Google account than that one, a grant where the user unticked Drive on Google's screen, and an answer without a refresh token.
+- **Storing:** the refresh token and the current access token are kept encrypted, in `GoogleCredential`. [Fernet](https://cryptography.io/en/latest/fernet/) encrypts them with AES-128 and signs them with HMAC-SHA256, under a key that HKDF-SHA256 derives from `TOKEN_ENCRYPTION_KEY` (`backend/accounts/fields.py`). The database, its backups, and any dump of it hold only ciphertext. Neither the admin, the logs, nor any API response shows a token.
+- **Using:** code gets an access token only from `drive_access_token(user)` in `backend/accounts/services.py`. It returns the stored one until a minute before it expires, which is an hour after Google issues it, then gets a new one with the refresh token. If Google refuses the refresh token (`invalid_grant`), because the user removed ShipScope's access in their Google account or the grant expired, it clears the tokens and raises `DriveAccessRevoked`, and the user connects again.
+- **Disconnecting** revokes the grant at Google and clears the tokens. They're cleared even when Google can't be reached, since the user asked ShipScope to stop using them.
+
 ### Signing in locally
 
 Each environment has its own OAuth client in the `shipscope` Google Cloud project, and so its own secret. Locally:
 
 1. Get the local client's ID and secret from the project's owner, or create your own client: in [Google Cloud's console](https://console.cloud.google.com/), under Google Auth Platform → Clients, create a client of type **Web application** with the redirect URL `http://localhost:5173/api/auth/google/callback/` and no JavaScript origins. Google shows the secret only once.
-2. Put them in `.env` as `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`, then `docker compose up -d backend` to restart the backend with them.
+2. Put them in `.env` as `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`. To connect Google Drive too, set `TOKEN_ENCRYPTION_KEY` to a random value, generated like `DJANGO_SECRET_KEY`. Then run `docker compose up -d backend` to restart the backend with them.
 3. Open the app at exactly **http://localhost:5173**, not `127.0.0.1` or port 8000. Google accepts only the redirect URL registered for the client.
 
-Without the two values, the app runs, and the sign-in button answers "Google sign-in isn't configured". Tests and CI never call Google: `responses` fakes its endpoints, and a test key signs the ID tokens.
+Without the two client values, the app runs, and the sign-in button answers "Google sign-in isn't configured". Without `TOKEN_ENCRYPTION_KEY`, the settings page's "Connect Google Drive" link answers "Connecting Google Drive isn't configured". Tests and CI never call Google: `responses` fakes its endpoints, and a test key signs the ID tokens.
 
 Compose runs Django's development server, which logs every request with its query string, so the local log shows the callback's code. In AWS, Gunicorn serves the app and leaves query strings out.
 
@@ -214,6 +226,11 @@ erDiagram
         bigint user_id FK, UK
         varchar google_sub UK "Google account ID, never empty"
         varchar sheet_id "blank until a Sheet is connected"
+        text refresh_token "encrypted, blank until Drive is connected"
+        text access_token "encrypted, valid for an hour"
+        timestamptz access_token_expires_at
+        text granted_scopes "as Google last reported them"
+        timestamptz drive_connected_at "null while Drive isn't connected"
     }
     Order {
         bigint user_id FK
@@ -254,6 +271,8 @@ erDiagram
 
 Weight is in ounces and dimensions in inches, EasyPost's units, and each field's name says which. Money is `numeric(10,2)`, which Django reads as an exact `Decimal`, never as a float.
 
+Google's tokens are stored encrypted, so the database holds only ciphertext ([Connecting Google Drive](#connecting-google-drive)).
+
 The database enforces the rules that must always hold, so no import or bug can break them:
 
 - one order per external ID per user, so syncing a Sheet again updates its orders instead of copying them
@@ -262,7 +281,7 @@ The database enforces the rules that must always hold, so no import or bug can b
 
 A shipment's selected rate must be one of its own rates. That's a rule across two rows, which a check constraint can't express, so model validation checks it, and the admin with it. Deleting a user deletes their orders, deleting an order deletes its shipment, rates, and flags, and deleting the selected rate clears the selection.
 
-The Django admin at `/admin/` lists every model, with filters and search. When a form breaks a rule, it shows the rule's message instead of an error page.
+The Django admin at `/admin/` lists every model, with filters and search. When a form breaks a rule, it shows the rule's message instead of an error page. For Google credentials, it shows only whether Drive is connected, never a token.
 
 ## Production image
 
@@ -315,7 +334,7 @@ lint ─┬─ test-backend  ─┬─ build-backend  ─┬─ deploy-staging �
 
 | Path | Contents |
 |---|---|
-| `backend/` | Django REST API, managed with uv. `config/` holds the settings and URL routes, `core/` the health endpoint, `accounts/` the users, their Google accounts, and signing in, `integrations/` the clients for outside APIs, and `orders/` the orders, shipments, rates, and anomaly flags. |
+| `backend/` | Django REST API, managed with uv. `config/` holds the settings and URL routes, `core/` the health endpoint, `accounts/` the users, their Google accounts, signing in, and Google Drive access, `integrations/` the clients for outside APIs, and `orders/` the orders, shipments, rates, and anomaly flags. |
 | `frontend/` | React + TypeScript app built with Vite. `src/router.tsx` lists the pages, which live in `src/pages/`. `src/api/` holds the typed API client, `src/auth/` the session hooks and `AuthGuard`, and `src/components/` the shared UI. |
 | `infra/` | Terraform and deploy scripts for the AWS environments. See [`infra/README.md`](infra/README.md). |
 | `.github/` | The GitHub Actions pipeline and Dependabot's configuration |
@@ -349,6 +368,9 @@ lint ─┬─ test-backend  ─┬─ build-backend  ─┬─ deploy-staging �
 | Google shows `Error 400: redirect_uri_mismatch` | The app was opened at another address than the one registered for the client, such as `127.0.0.1:5173` or `localhost:8000`, or the client ID belongs to another environment | Open http://localhost:5173. Compare the `redirect_uri` in Google's error details with the client's redirect URL |
 | Back from Google, the home page says signing in didn't work, and the backend log says `Google sign-in failed: unknown_state` | The session cookie that holds the flow didn't come back: the sign-in started on another host (such as `127.0.0.1`), the browser blocks cookies, or more than 10 minutes passed (then the log says `flow_expired`) | Start again from the app's own address |
 | The sign-in button shows "Google sign-in isn't configured." | `GOOGLE_OAUTH_CLIENT_ID` or `GOOGLE_OAUTH_CLIENT_SECRET` is empty in the backend's environment | Set both in `.env` ([Signing in locally](#signing-in-locally)), then `docker compose up -d backend` |
+| The settings page's "Connect Google Drive" shows "Connecting Google Drive isn't configured." | `TOKEN_ENCRYPTION_KEY`, `GOOGLE_OAUTH_CLIENT_ID`, or `GOOGLE_OAUTH_CLIENT_SECRET` is empty in the backend's environment | Set them in `.env` ([Signing in locally](#signing-in-locally)), then `docker compose up -d backend` |
+| The settings page shows Google Drive as not connected although it was, and the backend log says `Google Drive access revoked: user …: invalid_grant` | Google no longer accepts the refresh token: the user removed ShipScope's access at [myaccount.google.com/connections](https://myaccount.google.com/connections), the token went unused for 6 months, or the account has more than 100 refresh tokens for the client | Expected: the app cleared the tokens. Connect Google Drive again |
+| The backend log says `accounts.GoogleCredential.refresh_token can't be decrypted` | `TOKEN_ENCRYPTION_KEY` changed after the tokens were stored | The app treats those tokens as revoked, and the user connects Google Drive again. Locally, putting the old key back makes them readable again |
 | A request answers `403` with `CSRF Failed: CSRF token missing` | The request didn't send `X-CSRFToken`: the `csrftoken` cookie wasn't set yet, or the request bypassed the API client | Send requests through `src/api/client.ts`. `GET /api/auth/session/` sets the cookie |
 | Vite or TypeScript can't resolve `react-router-dom` | React Router 8 removed that package | Import from `react-router`, and `RouterProvider` from `react-router/dom` |
 | A frontend test of an error state is slow or times out | TanStack Query retries a failed query 3 times by default | Render with `renderWithQueryClient` from `src/test/render.tsx`, which turns retries off |

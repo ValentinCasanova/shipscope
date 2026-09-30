@@ -16,6 +16,13 @@ def google_settings(settings):
     services._client_for.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def token_encryption_key(settings):
+    """A key for the encrypted token fields, in place of any from the local .env."""
+    settings.TOKEN_ENCRYPTION_KEY = "test-token-encryption-key"
+    return settings.TOKEN_ENCRYPTION_KEY
+
+
 @pytest.fixture
 def google():
     """Fakes Google's endpoints. A request to any URL a test didn't add fails the test."""

@@ -29,6 +29,12 @@ NONCE = "test-nonce"
 # Shaped like Google's tokens, so tests can search logs for them.
 ACCESS_TOKEN = "ya29.test-access-token"
 REFRESH_TOKEN = "1//test-refresh-token"
+# The scopes of a grant that includes Drive, as Google's token endpoint lists them.
+DRIVE_SCOPES = (
+    "https://www.googleapis.com/auth/drive.file openid "
+    "https://www.googleapis.com/auth/userinfo.email "
+    "https://www.googleapis.com/auth/userinfo.profile"
+)
 
 
 @cache

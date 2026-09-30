@@ -84,6 +84,11 @@ function Privacy() {
       <h2>Your choices</h2>
       <ul>
         <li>
+          You can disconnect Google Drive on ShipScope&apos;s Settings page.
+          ShipScope then removes its access at Google, and deletes the Drive
+          access it stored.
+        </li>
+        <li>
           You can remove ShipScope&apos;s access to your Google account at any
           time, at{' '}
           <a href="https://myaccount.google.com/connections">

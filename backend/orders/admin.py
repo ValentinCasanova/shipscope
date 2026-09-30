@@ -1,5 +1,8 @@
+from typing import Any
+
 from django import forms
 from django.contrib import admin
+from django.db import models
 from django.http import HttpRequest
 from django.urls import reverse
 from django.utils.html import format_html
@@ -75,6 +78,16 @@ class ShipmentAdmin(admin.ModelAdmin):
     autocomplete_fields = ["order"]
     readonly_fields = ["created_at", "updated_at"]
     inlines = [RateInline]
+
+    def formfield_for_dbfield(
+        self, db_field: models.Field, request: HttpRequest, **kwargs: Any
+    ) -> forms.Field | None:
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if db_field.name == "selected_rate":
+            # No + next to the menu: its popup adds a rate for any shipment, and the menu
+            # takes only this shipment's own. Rates are added in the rows below.
+            formfield.widget.can_add_related = False
+        return formfield
 
 
 @admin.register(Rate)

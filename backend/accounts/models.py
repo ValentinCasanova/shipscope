@@ -4,6 +4,8 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
+from .fields import EncryptedTextField
+
 
 class User(AbstractUser):
     """A ShipScope user: Django's default user, with nothing added yet.
@@ -19,10 +21,12 @@ class User(AbstractUser):
 
 
 class GoogleCredential(models.Model):
-    """Links a user to their Google account and to the Sheet of orders they connected.
+    """Links a user to their Google account, their Google Drive access, and the Sheet of
+    orders they connected.
 
-    No OAuth tokens are stored yet. They arrive with the Google sign-in flow, together with
-    their encryption.
+    Drive access is Google's refresh token and the current access token, both encrypted
+    (fields.py). Both are blank until the user connects Google Drive, and only the Drive
+    functions in services.py read them.
     """
 
     user = models.OneToOneField(
@@ -37,6 +41,33 @@ class GoogleCredential(models.Model):
     )
     sheet_id = models.CharField(
         "Sheet ID", max_length=128, blank=True, help_text="Blank until a Sheet is connected."
+    )
+    # Google Drive access. The text columns also default to blank in the database, so the
+    # release before them can still create credentials while a release rolls out.
+    refresh_token = EncryptedTextField(
+        blank=True,
+        default="",
+        db_default="",
+        help_text="Google's refresh token, which gets new access tokens.",
+    )
+    access_token = EncryptedTextField(
+        blank=True,
+        default="",
+        db_default="",
+        help_text="The last access token, valid for about an hour.",
+    )
+    access_token_expires_at = models.DateTimeField(null=True, blank=True)
+    granted_scopes = models.TextField(
+        blank=True,
+        default="",
+        db_default="",
+        help_text="The scopes Google last reported, separated by spaces.",
+    )
+    drive_connected_at = models.DateTimeField(
+        "Google Drive connected at",
+        null=True,
+        blank=True,
+        help_text="When the user connected Google Drive. Empty while it isn't connected.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

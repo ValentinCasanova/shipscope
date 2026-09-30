@@ -139,6 +139,11 @@ AUTH_USER_MODEL = "accounts.User"
 GOOGLE_OAUTH_CLIENT_ID = env("GOOGLE_OAUTH_CLIENT_ID", default="")
 GOOGLE_OAUTH_CLIENT_SECRET = env("GOOGLE_OAUTH_CLIENT_SECRET", default="")
 
+# Any long random string. The key that encrypts users' Google tokens in the database is
+# derived from it (accounts/fields.py). In AWS it's a secret that Terraform generates.
+# Without it, everything but connecting Google Drive works.
+TOKEN_ENCRYPTION_KEY = env("TOKEN_ENCRYPTION_KEY", default="")
+
 # Django's default, set explicitly because signing in depends on it. Google's redirect
 # back to the callback is a navigation from another site: browsers send a Lax cookie
 # with it, but not a Strict one, and the callback needs the session that holds the

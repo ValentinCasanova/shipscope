@@ -1,9 +1,13 @@
 """Test data for users and their Google accounts, shared with the other apps' tests."""
 
+from datetime import timedelta
+
 import factory
 from django.conf import settings
+from django.utils import timezone
 
 from accounts.models import GoogleCredential
+from integrations.tests.fake_google import ACCESS_TOKEN, DRIVE_SCOPES, REFRESH_TOKEN
 
 
 class UserFactory(factory.django.DjangoModelFactory):
@@ -21,6 +25,19 @@ class UserFactory(factory.django.DjangoModelFactory):
 class GoogleCredentialFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = GoogleCredential
+
+    class Params:
+        # GoogleCredentialFactory(drive=True): Google Drive connected, with an access
+        # token valid for another hour. Storing the tokens needs TOKEN_ENCRYPTION_KEY.
+        drive = factory.Trait(
+            refresh_token=REFRESH_TOKEN,
+            access_token=ACCESS_TOKEN,
+            access_token_expires_at=factory.LazyFunction(
+                lambda: timezone.now() + timedelta(hours=1)
+            ),
+            granted_scopes=DRIVE_SCOPES,
+            drive_connected_at=factory.LazyFunction(timezone.now),
+        )
 
     user = factory.SubFactory(UserFactory)
     # Real IDs are strings of 21 digits.

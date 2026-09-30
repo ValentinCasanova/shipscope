@@ -10,7 +10,7 @@ from django.contrib.admin.templatetags.admin_urls import admin_urlname
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-from pytest_django.asserts import assertContains
+from pytest_django.asserts import assertContains, assertNotContains
 
 from orders.models import Order
 
@@ -144,6 +144,25 @@ def test_the_shipment_form_refuses_another_shipments_rate(superuser_client):
     assertContains(response, "Select a valid choice.")
     shipment.refresh_from_db()
     assert shipment.selected_rate is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param(lambda order: reverse("admin:orders_shipment_add"), id="add"),
+        pytest.param(
+            lambda order: reverse("admin:orders_shipment_change", args=[order.shipment.pk]),
+            id="change",
+        ),
+    ],
+)
+def test_the_selected_rate_menu_has_no_add_button(superuser_client, order, url):
+    # Its popup would add a rate for any shipment, which the menu then refuses.
+    response = superuser_client.get(url(order))
+
+    assertNotContains(response, 'id="add_id_selected_rate"')
+    # The order's + stays.
+    assertContains(response, 'id="add_id_order"')
 
 
 def test_a_rate_keeps_its_shipment(superuser_client):

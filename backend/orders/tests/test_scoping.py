@@ -24,7 +24,13 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 
 from accounts.tests.factories import UserFactory
-from accounts.views import SessionView, google_callback, google_login
+from accounts.views import (
+    GoogleDriveView,
+    SessionView,
+    google_callback,
+    google_drive_connect,
+    google_login,
+)
 from core.views import health
 from orders.models import AnomalyFlag, Order, OwnedQuerySet, Rate, Shipment
 from orders.permissions import IsOwner, OwnedByUserMixin
@@ -206,6 +212,10 @@ VIEWS_WITHOUT_ORDER_DATA = [
     google_login,
     google_callback,
     SessionView,
+    # Connecting and disconnecting Google Drive: each acts only on the signed-in user's
+    # own Google credential.
+    google_drive_connect,
+    GoogleDriveView,
 ]
 
 

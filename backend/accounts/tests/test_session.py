@@ -5,7 +5,7 @@ import base64
 import pytest
 from django.test import Client
 
-from .factories import UserFactory
+from .factories import GoogleCredentialFactory, UserFactory
 
 SESSION_URL = "/api/auth/session/"
 
@@ -32,8 +32,20 @@ def test_signed_in_gets_the_user(client, user):
     response = client.get(SESSION_URL)
 
     assert response.json() == {
-        "user": {"id": user.pk, "email": "ada@example.com", "name": "Ada Lovelace"}
+        "user": {
+            "id": user.pk,
+            "email": "ada@example.com",
+            "name": "Ada Lovelace",
+            "google_drive_connected": False,
+        }
     }
+
+
+def test_the_user_shows_whether_google_drive_is_connected(client):
+    credential = GoogleCredentialFactory(drive=True)
+    client.force_login(credential.user)
+
+    assert client.get(SESSION_URL).json()["user"]["google_drive_connected"] is True
 
 
 def test_a_user_without_a_name_is_named_by_email(client):

@@ -5,6 +5,7 @@ export const ADA: SessionUser = {
   id: 7,
   email: 'ada@example.com',
   name: 'Ada Lovelace',
+  google_drive_connected: false,
 };
 
 type Handler = (init: RequestInit | undefined) => Response | Promise<Response>;

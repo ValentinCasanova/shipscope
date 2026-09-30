@@ -5,6 +5,7 @@ export interface SessionUser {
   id: number;
   email: string;
   name: string;
+  google_drive_connected: boolean;
 }
 
 export interface SessionResponse {

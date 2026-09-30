@@ -57,8 +57,14 @@ footer {
   font-size: 0.875rem;
 }
 
-[role='alert'] {
+[role='alert'],
+.notice {
   padding: 0.5rem 0.75rem;
   border-left: 4px solid #b3261e;
   background: #fdecea;
+}
+
+.notice {
+  border-left-color: #1e7b34;
+  background: #e8f5e9;
 }
